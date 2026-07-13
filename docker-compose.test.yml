@@ -1,0 +1,29 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: test
+      MYSQL_DATABASE: dbclient_test
+    ports: ["33061:3306"]
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: dbclient_test
+    ports: ["54321:5432"]
+  redis:
+    image: redis:7
+    ports: ["63791:6379"]
+  sshd:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine:3.20
+        RUN apk add --no-cache openssh \
+         && ssh-keygen -A \
+         && adduser -D tunnel \
+         && echo "tunnel:tunnelpass" | chpasswd \
+         && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+         && sed -i 's/^#\?AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config
+        CMD ["/usr/sbin/sshd", "-D", "-e"]
+    ports: ["2223:22"]
