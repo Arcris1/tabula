@@ -524,3 +524,19 @@ pub async fn cancel_query(state: State<'_, AppState>, query_id: String) -> Resul
     }
     Ok(())
 }
+
+// ---- local-stack service management ----
+
+#[tauri::command]
+pub async fn list_services() -> Result<Vec<crate::services::ServiceInfo>, AppError> {
+    tokio::task::spawn_blocking(crate::services::list)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn service_action(id: String, action: String) -> Result<(), AppError> {
+    tokio::task::spawn_blocking(move || crate::services::action(&id, &action))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+}

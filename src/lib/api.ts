@@ -141,6 +141,19 @@ export interface RedisEntry {
   totalItems?: number | null;
 }
 
+export interface ServiceInfo {
+  id: string;
+  kind: string;
+  name: string;
+  description: string;
+  running: boolean;
+  installed: boolean;
+  manageable: boolean;
+  manager: string;
+  version?: string | null;
+  port?: number | null;
+}
+
 export const api = {
   listConnections: () => invoke<ConnectionConfig[]>("list_connections"),
   saveConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
@@ -188,4 +201,7 @@ export const api = {
   applyDdl: (id: string, op: DdlOp) => invoke<void>("apply_ddl", { id, op }),
   openNewWindow: () => invoke<void>("open_new_window"),
   forgetHostKey: (host: string, port: number) => invoke<void>("forget_host_key", { host, port }),
+  listServices: () => invoke<ServiceInfo[]>("list_services"),
+  serviceAction: (id: string, action: "start" | "stop" | "restart") =>
+    invoke<void>("service_action", { id, action }),
 };
