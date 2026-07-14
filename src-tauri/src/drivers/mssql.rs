@@ -292,6 +292,32 @@ impl SqlDriver for MssqlDriver {
 
     fn ddl_flavor(&self) -> crate::ddl::Flavor { crate::ddl::Flavor::Mssql }
 
+    async fn list_databases(&self) -> Result<Vec<super::DbInfo>, AppError> {
+        let rows = self.query_rows(
+            "SELECT d.name AS name, \
+                    (SELECT SUM(CAST(mf.size AS BIGINT)) * 8 * 1024 FROM sys.master_files mf \
+                     WHERE mf.database_id = d.database_id) AS size \
+             FROM sys.databases d WHERE d.database_id > 4 ORDER BY d.name",
+            &[],
+        ).await?;
+        Ok(rows.iter().map(|r| super::DbInfo {
+            name: get_str(r, "name"),
+            size_bytes: r.try_get::<i64, _>("size").ok().flatten(),
+        }).collect())
+    }
+    async fn create_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        let mut conn = self.pool.get().await?;
+        conn.execute(format!("CREATE DATABASE {}", quote(name)), &[]).await?;
+        Ok(())
+    }
+    async fn drop_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        let mut conn = self.pool.get().await?;
+        conn.execute(format!("DROP DATABASE {}", quote(name)), &[]).await?;
+        Ok(())
+    }
+
     async fn list_functions(&self) -> Result<Vec<String>, AppError> {
         let rows = self.query_rows(
             "SELECT name FROM sys.objects WHERE type IN ('FN','IF','TF','P') AND is_ms_shipped = 0 \
@@ -595,5 +621,28 @@ mod session_test {
         assert!(rows >= 2, "expected >=2 rows, got {rows}");
         assert!(done);
         println!("session SELECT: {cols} cols, {rows} rows");
+    }
+}
+
+#[cfg(test)]
+mod db_mgmt_test {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn create_list_drop() {
+        let d = MssqlDriver::connect("127.0.0.1", 1433, "sa", "YourStrongPassword123!", "master")
+            .await.expect("connect");
+        let _ = d.drop_database("tabula_dbtest").await; // idempotent cleanup
+        // create
+        d.create_database("tabula_dbtest").await.expect("create");
+        let dbs = d.list_databases().await.expect("list");
+        assert!(dbs.iter().any(|x| x.name == "tabula_dbtest"), "created db not listed: {:?}", dbs.iter().map(|x| &x.name).collect::<Vec<_>>());
+        println!("databases: {:?}", dbs.iter().map(|x| (&x.name, x.size_bytes)).collect::<Vec<_>>());
+        // drop
+        d.drop_database("tabula_dbtest").await.expect("drop");
+        let dbs2 = d.list_databases().await.expect("list2");
+        assert!(!dbs2.iter().any(|x| x.name == "tabula_dbtest"), "db not dropped");
+        println!("create/list/drop OK");
     }
 }

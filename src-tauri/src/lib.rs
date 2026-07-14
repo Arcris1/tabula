@@ -104,6 +104,9 @@ pub fn run() {
             commands::forget_host_key,
             commands::list_services,
             commands::service_action,
+            commands::list_databases,
+            commands::create_database,
+            commands::drop_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

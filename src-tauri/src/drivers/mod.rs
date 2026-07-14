@@ -27,6 +27,22 @@ pub struct ColumnMeta {
     pub data_type: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbInfo {
+    pub name: String,
+    pub size_bytes: Option<i64>,
+}
+
+/// Database names are interpolated raw into `CREATE`/`DROP DATABASE` (which
+/// can't be parameterized), so restrict them to a safe identifier shape.
+pub fn valid_db_name(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty()
+        && n.len() <= 64
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppliedResult {
@@ -209,6 +225,15 @@ pub trait SqlDriver: Send + Sync {
     async fn list_functions(&self) -> Result<Vec<String>, AppError>;
     /// source (CREATE FUNCTION/PROCEDURE ...) of a named function; empty if none
     async fn function_definition(&self, name: &str) -> Result<String, AppError>;
+
+    /// databases/schemas on this server (empty for single-file engines)
+    async fn list_databases(&self) -> Result<Vec<DbInfo>, AppError> { Ok(vec![]) }
+    async fn create_database(&self, _name: &str) -> Result<(), AppError> {
+        Err(AppError::query("this engine does not support creating databases"))
+    }
+    async fn drop_database(&self, _name: &str) -> Result<(), AppError> {
+        Err(AppError::query("this engine does not support dropping databases"))
+    }
 }
 
 #[async_trait::async_trait]

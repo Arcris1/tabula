@@ -183,6 +183,27 @@ impl SqlDriver for PostgresDriver {
 
     fn ddl_flavor(&self) -> crate::ddl::Flavor { crate::ddl::Flavor::Postgres }
 
+    async fn list_databases(&self) -> Result<Vec<super::DbInfo>, AppError> {
+        let rows = sqlx::query(
+            "SELECT datname, pg_database_size(datname) FROM pg_database \
+             WHERE datistemplate = false AND datname <> 'postgres' ORDER BY datname",
+        ).fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| super::DbInfo {
+            name: r.get::<String, _>(0),
+            size_bytes: r.try_get::<i64, _>(1).ok(),
+        }).collect())
+    }
+    async fn create_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        sqlx::query(&format!("CREATE DATABASE {}", quote(name))).execute(&self.pool).await?;
+        Ok(())
+    }
+    async fn drop_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        sqlx::query(&format!("DROP DATABASE {}", quote(name))).execute(&self.pool).await?;
+        Ok(())
+    }
+
     async fn list_functions(&self) -> Result<Vec<String>, AppError> {
         let rows = sqlx::query(
             "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \

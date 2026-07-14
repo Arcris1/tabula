@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useServicesStore } from "../stores/services";
 import ServicesView from "./ServicesView.vue";
+import DatabasesView from "./DatabasesView.vue";
 
 const emit = defineEmits<{ exit: [] }>();
 const services = useServicesStore();
@@ -12,7 +13,7 @@ const section = ref<Section>("services");
 const nav: { id: Section; label: string; icon: string; ready?: boolean }[] = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
   { id: "services", label: "Services", icon: "≋", ready: true },
-  { id: "databases", label: "Databases", icon: "▤" },
+  { id: "databases", label: "Databases", icon: "▤", ready: true },
   { id: "logs", label: "Logs", icon: "≡" },
   { id: "mail", label: "Mail", icon: "✉" },
   { id: "settings", label: "Settings", icon: "⚙" },
@@ -64,6 +65,7 @@ const titles: Record<Section, string> = {
       </header>
 
       <ServicesView v-if="section === 'services'" />
+      <DatabasesView v-else-if="section === 'databases'" />
       <div v-else class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
         {{ titles[section] }} — coming soon
       </div>
