@@ -11,6 +11,7 @@ pub mod impexp;
 pub mod known_hosts;
 pub mod queries;
 pub mod registry;
+pub mod services;
 pub mod sessions;
 
 use config::ConfigStore;
@@ -101,6 +102,8 @@ pub fn run() {
             commands::open_new_window,
             commands::close_session,
             commands::forget_host_key,
+            commands::list_services,
+            commands::service_action,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

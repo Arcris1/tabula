@@ -6,7 +6,7 @@ import { useShortcutsStore } from "../stores/shortcuts";
 import ConnectionForm from "./ConnectionForm.vue";
 
 defineProps<{ canCancel?: boolean }>();
-const emit = defineEmits<{ connected: [id: string, paradigm: "sql" | "kv"]; settings: []; cancel: [] }>();
+const emit = defineEmits<{ connected: [id: string, paradigm: "sql" | "kv"]; settings: []; cancel: []; stack: [] }>();
 const store = useConnectionsStore();
 const editing = ref<ConnectionConfig | null>(null);
 const showForm = ref(false);
@@ -61,6 +61,7 @@ async function forgetAndRetry(c: ConnectionConfig) {
         <h1 class="text-sm font-medium text-zinc-400">Connections</h1>
         <div class="flex gap-2">
           <button v-if="canCancel" @click="emit('cancel')" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-800 text-xs">← Back</button>
+          <button @click="emit('stack')" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-800 text-xs" title="Local stack manager">Local Stack</button>
           <button @click="emit('settings')" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-800 text-xs" title="Settings (⌘,)">⚙</button>
           <button @click="add" class="px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800 text-xs">+ New</button>
         </div>
