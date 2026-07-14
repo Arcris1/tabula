@@ -141,6 +141,11 @@ export interface RedisEntry {
   totalItems?: number | null;
 }
 
+export interface DbInfo {
+  name: string;
+  sizeBytes?: number | null;
+}
+
 export interface ServiceInfo {
   id: string;
   kind: string;
@@ -204,4 +209,7 @@ export const api = {
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   serviceAction: (id: string, action: "start" | "stop" | "restart") =>
     invoke<void>("service_action", { id, action }),
+  listDatabases: (id: string) => invoke<DbInfo[]>("list_databases", { id }),
+  createDatabase: (id: string, name: string) => invoke<void>("create_database", { id, name }),
+  dropDatabase: (id: string, name: string) => invoke<void>("drop_database", { id, name }),
 };

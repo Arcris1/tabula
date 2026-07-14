@@ -166,6 +166,32 @@ impl SqlDriver for MysqlDriver {
 
     fn ddl_flavor(&self) -> crate::ddl::Flavor { crate::ddl::Flavor::Mysql }
 
+    async fn list_databases(&self) -> Result<Vec<super::DbInfo>, AppError> {
+        let rows = sqlx::query(
+            "SELECT s.schema_name, CAST(COALESCE(t.sz, 0) AS SIGNED) \
+             FROM information_schema.schemata s \
+             LEFT JOIN (SELECT table_schema, SUM(data_length + index_length) sz \
+                        FROM information_schema.tables GROUP BY table_schema) t \
+               ON t.table_schema = s.schema_name \
+             WHERE s.schema_name NOT IN ('information_schema','performance_schema','mysql','sys') \
+             ORDER BY s.schema_name",
+        ).fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| super::DbInfo {
+            name: r.get::<String, _>(0),
+            size_bytes: r.try_get::<i64, _>(1).ok(),
+        }).collect())
+    }
+    async fn create_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        sqlx::query(&format!("CREATE DATABASE {}", quote(name))).execute(&self.pool).await?;
+        Ok(())
+    }
+    async fn drop_database(&self, name: &str) -> Result<(), AppError> {
+        if !super::valid_db_name(name) { return Err(AppError::query("invalid database name")); }
+        sqlx::query(&format!("DROP DATABASE {}", quote(name))).execute(&self.pool).await?;
+        Ok(())
+    }
+
     async fn list_functions(&self) -> Result<Vec<String>, AppError> {
         let rows = sqlx::query(
             "SELECT CAST(routine_name AS CHAR) FROM information_schema.routines \

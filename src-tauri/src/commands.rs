@@ -540,3 +540,29 @@ pub async fn service_action(id: String, action: String) -> Result<(), AppError> 
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
 }
+
+// ---- database management (local-stack Databases view) ----
+
+#[tauri::command]
+pub async fn list_databases(window: tauri::Window, state: State<'_, AppState>, id: String) -> Result<Vec<crate::drivers::DbInfo>, AppError> {
+    match &*live(&state, &scoped(&window, &id)).await? {
+        LiveConnection::Sql(d) => d.list_databases().await,
+        LiveConnection::Kv(_) => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+pub async fn create_database(window: tauri::Window, state: State<'_, AppState>, id: String, name: String) -> Result<(), AppError> {
+    match &*live(&state, &scoped(&window, &id)).await? {
+        LiveConnection::Sql(d) => d.create_database(&name).await,
+        LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
+    }
+}
+
+#[tauri::command]
+pub async fn drop_database(window: tauri::Window, state: State<'_, AppState>, id: String, name: String) -> Result<(), AppError> {
+    match &*live(&state, &scoped(&window, &id)).await? {
+        LiveConnection::Sql(d) => d.drop_database(&name).await,
+        LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
+    }
+}
