@@ -5,11 +5,14 @@ import ServicesView from "./ServicesView.vue";
 import DatabasesView from "./DatabasesView.vue";
 import DashboardView from "./DashboardView.vue";
 import LogsView from "./LogsView.vue";
+import MailView from "./MailView.vue";
+import ToolsView from "./ToolsView.vue";
+import SettingsView from "./SettingsView.vue";
 
 const emit = defineEmits<{ exit: [] }>();
 const services = useServicesStore();
 
-type Section = "dashboard" | "services" | "databases" | "logs" | "mail" | "settings";
+type Section = "dashboard" | "services" | "databases" | "logs" | "mail" | "tools" | "settings";
 const section = ref<Section>("dashboard");
 
 const nav: { id: Section; label: string; icon: string; ready?: boolean }[] = [
@@ -17,12 +20,13 @@ const nav: { id: Section; label: string; icon: string; ready?: boolean }[] = [
   { id: "services", label: "Services", icon: "≋", ready: true },
   { id: "databases", label: "Databases", icon: "▤", ready: true },
   { id: "logs", label: "Logs", icon: "≡", ready: true },
-  { id: "mail", label: "Mail", icon: "✉" },
-  { id: "settings", label: "Settings", icon: "⚙" },
+  { id: "mail", label: "Mail", icon: "✉", ready: true },
+  { id: "tools", label: "Tools", icon: "⚒", ready: true },
+  { id: "settings", label: "Settings", icon: "⚙", ready: true },
 ];
 const titles: Record<Section, string> = {
   dashboard: "Dashboard", services: "Services", databases: "Databases",
-  logs: "Logs", mail: "Mail", settings: "Settings",
+  logs: "Logs", mail: "Mail", tools: "Tools", settings: "Settings",
 };
 </script>
 
@@ -70,6 +74,9 @@ const titles: Record<Section, string> = {
       <ServicesView v-else-if="section === 'services'" />
       <DatabasesView v-else-if="section === 'databases'" />
       <LogsView v-else-if="section === 'logs'" />
+      <MailView v-else-if="section === 'mail'" />
+      <ToolsView v-else-if="section === 'tools'" />
+      <SettingsView v-else-if="section === 'settings'" />
       <div v-else class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
         {{ titles[section] }} — coming soon
       </div>

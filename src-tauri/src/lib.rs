@@ -110,6 +110,8 @@ pub fn run() {
             commands::drop_database,
             commands::list_logs,
             commands::read_log,
+            commands::check_ports,
+            commands::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

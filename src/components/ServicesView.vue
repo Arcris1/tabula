@@ -18,6 +18,7 @@ const GROUPS: { key: string; label: string }[] = [
   { key: "web", label: "Web server" },
   { key: "database", label: "Database" },
   { key: "runtime", label: "Runtime" },
+  { key: "tool", label: "Tools" },
 ];
 const groups = computed(() =>
   GROUPS.map((g) => ({ ...g, items: store.services.filter((s) => s.category === g.key) }))

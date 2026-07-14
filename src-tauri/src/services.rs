@@ -55,9 +55,23 @@ const KNOWN: &[Known] = &[
     Known { kind: "redis", category: "database", name: "Redis", description: "In-memory cache and queues", port: 6379, version_bin: "redis-server", version_arg: "--version", brew: &["redis"], winsvc: &["Redis"] },
     // runtimes (version-only)
     Known { kind: "node", category: "runtime", name: "Node.js", description: "JavaScript runtime", port: 0, version_bin: "node", version_arg: "--version", brew: &[], winsvc: &[] },
+    // tools
+    Known { kind: "mailpit", category: "tool", name: "Mailpit", description: "Local mail catcher (SMTP + web inbox)", port: 8025, version_bin: "mailpit", version_arg: "version", brew: &["mailpit"], winsvc: &["mailpit"] },
 ];
 
-fn port_open(port: u16) -> bool {
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortStatus {
+    pub port: u16,
+    pub open: bool,
+}
+
+/// Probe a set of TCP ports on localhost (used by the Tools view).
+pub fn check_ports(ports: &[u16]) -> Vec<PortStatus> {
+    ports.iter().map(|&port| PortStatus { port, open: port_open(port) }).collect()
+}
+
+pub fn port_open(port: u16) -> bool {
     if port == 0 { return false; } // runtime, not a port service
     use std::net::{SocketAddr, TcpStream};
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

@@ -157,6 +157,10 @@ export interface LogChunk {
   offset: number;
   size: number;
 }
+export interface PortStatus {
+  port: number;
+  open: boolean;
+}
 
 export interface ServiceInfo {
   id: string;
@@ -227,4 +231,6 @@ export const api = {
   dropDatabase: (id: string, name: string) => invoke<void>("drop_database", { id, name }),
   listLogs: () => invoke<LogSource[]>("list_logs"),
   readLog: (path: string, from: number | null) => invoke<LogChunk>("read_log", { path, from }),
+  checkPorts: (ports: number[]) => invoke<PortStatus[]>("check_ports", { ports }),
+  openExternal: (target: string) => invoke<void>("open_external", { target }),
 };
