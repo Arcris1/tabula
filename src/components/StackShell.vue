@@ -3,15 +3,16 @@ import { ref } from "vue";
 import { useServicesStore } from "../stores/services";
 import ServicesView from "./ServicesView.vue";
 import DatabasesView from "./DatabasesView.vue";
+import DashboardView from "./DashboardView.vue";
 
 const emit = defineEmits<{ exit: [] }>();
 const services = useServicesStore();
 
 type Section = "dashboard" | "services" | "databases" | "logs" | "mail" | "settings";
-const section = ref<Section>("services");
+const section = ref<Section>("dashboard");
 
 const nav: { id: Section; label: string; icon: string; ready?: boolean }[] = [
-  { id: "dashboard", label: "Dashboard", icon: "▦" },
+  { id: "dashboard", label: "Dashboard", icon: "▦", ready: true },
   { id: "services", label: "Services", icon: "≋", ready: true },
   { id: "databases", label: "Databases", icon: "▤", ready: true },
   { id: "logs", label: "Logs", icon: "≡" },
@@ -54,7 +55,7 @@ const titles: Record<Section, string> = {
     <div class="flex-1 min-w-0 flex flex-col">
       <header class="h-14 shrink-0 flex items-center gap-3 px-5 border-b border-zinc-800">
         <h1 class="text-lg font-semibold text-zinc-100">{{ titles[section] }}</h1>
-        <div v-if="section === 'services'" class="ml-auto flex items-center gap-2">
+        <div v-if="section === 'services' || section === 'dashboard'" class="ml-auto flex items-center gap-2">
           <button @click="services.load()" :disabled="services.loading"
             class="text-xs px-2.5 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 disabled:opacity-40">Refresh</button>
           <button @click="services.startAll()"
@@ -64,7 +65,8 @@ const titles: Record<Section, string> = {
         </div>
       </header>
 
-      <ServicesView v-if="section === 'services'" />
+      <DashboardView v-if="section === 'dashboard'" />
+      <ServicesView v-else-if="section === 'services'" />
       <DatabasesView v-else-if="section === 'databases'" />
       <div v-else class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
         {{ titles[section] }} — coming soon

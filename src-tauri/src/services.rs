@@ -12,8 +12,10 @@ use std::time::Duration;
 pub struct ServiceInfo {
     /// stable id used for start/stop actions (brew formula / windows service name)
     pub id: String,
-    /// engine category for icon/grouping: mysql | mariadb | postgres | redis
+    /// engine kind for icon: nginx | apache | php | node | mysql | ... | redis
     pub kind: String,
+    /// grouping: web | database | runtime
+    pub category: String,
     pub name: String,
     pub description: String,
     pub running: bool,
@@ -28,10 +30,13 @@ pub struct ServiceInfo {
 
 struct Known {
     kind: &'static str,
+    category: &'static str,
     name: &'static str,
     description: &'static str,
+    /// 0 = not a port service (runtime); skip the port probe
     port: u16,
     version_bin: &'static str,
+    version_arg: &'static str,
     /// brew formula names (also matches `name@version` variants)
     brew: &'static [&'static str],
     /// windows service name prefixes
@@ -39,13 +44,21 @@ struct Known {
 }
 
 const KNOWN: &[Known] = &[
-    Known { kind: "mysql", name: "MySQL", description: "MySQL database server", port: 3306, version_bin: "mysqld", brew: &["mysql"], winsvc: &["MySQL"] },
-    Known { kind: "mariadb", name: "MariaDB", description: "MySQL-compatible database", port: 3307, version_bin: "mariadbd", brew: &["mariadb"], winsvc: &["MariaDB"] },
-    Known { kind: "postgres", name: "PostgreSQL", description: "PostgreSQL database server", port: 5432, version_bin: "postgres", brew: &["postgresql"], winsvc: &["postgresql"] },
-    Known { kind: "redis", name: "Redis", description: "In-memory cache and queues", port: 6379, version_bin: "redis-server", brew: &["redis"], winsvc: &["Redis"] },
+    // web stack
+    Known { kind: "nginx", category: "web", name: "Nginx", description: "Web server with SSL vhosts", port: 8080, version_bin: "nginx", version_arg: "-v", brew: &["nginx"], winsvc: &["nginx"] },
+    Known { kind: "apache", category: "web", name: "Apache", description: "Apache HTTP server (httpd)", port: 8080, version_bin: "httpd", version_arg: "-v", brew: &["httpd"], winsvc: &["Apache"] },
+    Known { kind: "php", category: "web", name: "PHP", description: "PHP-FPM runtime", port: 9000, version_bin: "php", version_arg: "--version", brew: &["php"], winsvc: &["php"] },
+    // databases
+    Known { kind: "mysql", category: "database", name: "MySQL", description: "MySQL database server", port: 3306, version_bin: "mysqld", version_arg: "--version", brew: &["mysql"], winsvc: &["MySQL"] },
+    Known { kind: "mariadb", category: "database", name: "MariaDB", description: "MySQL-compatible database", port: 3307, version_bin: "mariadbd", version_arg: "--version", brew: &["mariadb"], winsvc: &["MariaDB"] },
+    Known { kind: "postgres", category: "database", name: "PostgreSQL", description: "PostgreSQL database server", port: 5432, version_bin: "postgres", version_arg: "--version", brew: &["postgresql"], winsvc: &["postgresql"] },
+    Known { kind: "redis", category: "database", name: "Redis", description: "In-memory cache and queues", port: 6379, version_bin: "redis-server", version_arg: "--version", brew: &["redis"], winsvc: &["Redis"] },
+    // runtimes (version-only)
+    Known { kind: "node", category: "runtime", name: "Node.js", description: "JavaScript runtime", port: 0, version_bin: "node", version_arg: "--version", brew: &[], winsvc: &[] },
 ];
 
 fn port_open(port: u16) -> bool {
+    if port == 0 { return false; } // runtime, not a port service
     use std::net::{SocketAddr, TcpStream};
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
@@ -82,8 +95,8 @@ fn parse_version(s: &str) -> Option<String> {
     None
 }
 
-fn binary_version(bin: &str) -> Option<String> {
-    let out = std::process::Command::new(bin).arg("--version").output().ok()?;
+fn binary_version(bin: &str, arg: &str) -> Option<String> {
+    let out = std::process::Command::new(bin).arg(arg).output().ok()?;
     let text = if out.stdout.is_empty() {
         String::from_utf8_lossy(&out.stderr).to_string()
     } else {
@@ -130,13 +143,13 @@ pub fn list() -> Vec<ServiceInfo> {
         let running = chosen.map(|(_, s)| s == "started").unwrap_or(false) || port_open(k.port);
         let installed = !matches.is_empty() || which(k.version_bin);
         ServiceInfo {
-            id: chosen.map(|(n, _)| n.clone()).unwrap_or_else(|| k.brew[0].to_string()),
-            kind: k.kind.into(), name: k.name.into(), description: k.description.into(),
+            id: chosen.map(|(n, _)| n.clone()).unwrap_or_else(|| k.brew.first().copied().unwrap_or(k.kind).to_string()),
+            kind: k.kind.into(), category: k.category.into(), name: k.name.into(), description: k.description.into(),
             running, installed,
             manageable: chosen.is_some(),
             manager: if chosen.is_some() { "brew".into() } else { "unmanaged".into() },
-            version: if installed { binary_version(k.version_bin) } else { None },
-            port: Some(k.port),
+            version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
+            port: if k.port == 0 { None } else { Some(k.port) },
         }
     }).collect()
 }
@@ -181,13 +194,13 @@ pub fn list() -> Vec<ServiceInfo> {
         let running = matched.map(|(_, s)| s == "Running").unwrap_or(false) || port_open(k.port);
         let installed = matched.is_some() || which(k.version_bin);
         ServiceInfo {
-            id: matched.map(|(n, _)| n.clone()).unwrap_or_else(|| k.winsvc[0].to_string()),
-            kind: k.kind.into(), name: k.name.into(), description: k.description.into(),
+            id: matched.map(|(n, _)| n.clone()).unwrap_or_else(|| k.winsvc.first().copied().unwrap_or(k.kind).to_string()),
+            kind: k.kind.into(), category: k.category.into(), name: k.name.into(), description: k.description.into(),
             running, installed,
             manageable: matched.is_some(),
             manager: if matched.is_some() { "winservice".into() } else { "unmanaged".into() },
-            version: if installed { binary_version(k.version_bin) } else { None },
-            port: Some(k.port),
+            version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
+            port: if k.port == 0 { None } else { Some(k.port) },
         }
     }).collect()
 }
@@ -215,11 +228,12 @@ pub fn list() -> Vec<ServiceInfo> {
     KNOWN.iter().map(|k| {
         let installed = which(k.version_bin);
         ServiceInfo {
-            id: k.brew[0].into(), kind: k.kind.into(), name: k.name.into(), description: k.description.into(),
+            id: k.brew.first().copied().unwrap_or(k.kind).into(),
+            kind: k.kind.into(), category: k.category.into(), name: k.name.into(), description: k.description.into(),
             running: port_open(k.port), installed,
             manageable: false, manager: "unmanaged".into(),
-            version: if installed { binary_version(k.version_bin) } else { None },
-            port: Some(k.port),
+            version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
+            port: if k.port == 0 { None } else { Some(k.port) },
         }
     }).collect()
 }

@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
 import { useServicesStore } from "../stores/services";
 
 const store = useServicesStore();
 onMounted(() => store.load());
 
 const kindStyle: Record<string, string> = {
-  mysql: "bg-blue-600", mariadb: "bg-amber-600",
-  postgres: "bg-indigo-600", redis: "bg-red-600",
+  nginx: "bg-emerald-600", apache: "bg-red-600", php: "bg-indigo-600", node: "bg-green-600",
+  mysql: "bg-blue-600", mariadb: "bg-amber-600", postgres: "bg-indigo-600", redis: "bg-red-600",
 };
 function badge(kind: string) {
   return kindStyle[kind] ?? "bg-zinc-600";
 }
+
+// grouped, in a stable display order
+const GROUPS: { key: string; label: string }[] = [
+  { key: "web", label: "Web server" },
+  { key: "database", label: "Database" },
+  { key: "runtime", label: "Runtime" },
+];
+const groups = computed(() =>
+  GROUPS.map((g) => ({ ...g, items: store.services.filter((s) => s.category === g.key) }))
+    .filter((g) => g.items.length),
+);
 </script>
 
 <template>
@@ -20,8 +31,10 @@ function badge(kind: string) {
       {{ store.error }}
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-      <div v-for="s in store.services" :key="s.id"
+    <div v-for="g in groups" :key="g.key" class="mb-5">
+      <div class="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">{{ g.label }}</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div v-for="s in g.items" :key="s.id"
         class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 flex flex-col gap-3">
         <!-- header -->
         <div class="flex items-start gap-3">
@@ -63,6 +76,7 @@ function badge(kind: string) {
             <span v-else class="text-[11px] text-zinc-600">not installed</span>
           </div>
         </div>
+      </div>
       </div>
     </div>
 

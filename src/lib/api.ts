@@ -149,6 +149,7 @@ export interface DbInfo {
 export interface ServiceInfo {
   id: string;
   kind: string;
+  category: string;
   name: string;
   description: string;
   running: boolean;
