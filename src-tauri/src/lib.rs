@@ -9,6 +9,7 @@ pub mod error;
 pub mod history;
 pub mod impexp;
 pub mod known_hosts;
+pub mod logs;
 pub mod queries;
 pub mod registry;
 pub mod services;
@@ -107,6 +108,8 @@ pub fn run() {
             commands::list_databases,
             commands::create_database,
             commands::drop_database,
+            commands::list_logs,
+            commands::read_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -566,3 +566,19 @@ pub async fn drop_database(window: tauri::Window, state: State<'_, AppState>, id
         LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
     }
 }
+
+// ---- log tailing (local-stack Logs view) ----
+
+#[tauri::command]
+pub async fn list_logs() -> Result<Vec<crate::logs::LogSource>, AppError> {
+    tokio::task::spawn_blocking(crate::logs::list)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn read_log(path: String, from: Option<u64>) -> Result<crate::logs::LogChunk, AppError> {
+    tokio::task::spawn_blocking(move || crate::logs::read(&path, from))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+}

@@ -4,6 +4,7 @@ import { useServicesStore } from "../stores/services";
 import ServicesView from "./ServicesView.vue";
 import DatabasesView from "./DatabasesView.vue";
 import DashboardView from "./DashboardView.vue";
+import LogsView from "./LogsView.vue";
 
 const emit = defineEmits<{ exit: [] }>();
 const services = useServicesStore();
@@ -15,7 +16,7 @@ const nav: { id: Section; label: string; icon: string; ready?: boolean }[] = [
   { id: "dashboard", label: "Dashboard", icon: "▦", ready: true },
   { id: "services", label: "Services", icon: "≋", ready: true },
   { id: "databases", label: "Databases", icon: "▤", ready: true },
-  { id: "logs", label: "Logs", icon: "≡" },
+  { id: "logs", label: "Logs", icon: "≡", ready: true },
   { id: "mail", label: "Mail", icon: "✉" },
   { id: "settings", label: "Settings", icon: "⚙" },
 ];
@@ -68,6 +69,7 @@ const titles: Record<Section, string> = {
       <DashboardView v-if="section === 'dashboard'" />
       <ServicesView v-else-if="section === 'services'" />
       <DatabasesView v-else-if="section === 'databases'" />
+      <LogsView v-else-if="section === 'logs'" />
       <div v-else class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
         {{ titles[section] }} — coming soon
       </div>

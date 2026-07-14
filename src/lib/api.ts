@@ -146,6 +146,18 @@ export interface DbInfo {
   sizeBytes?: number | null;
 }
 
+export interface LogSource {
+  id: string;
+  label: string;
+  category: string;
+  path: string;
+}
+export interface LogChunk {
+  content: string;
+  offset: number;
+  size: number;
+}
+
 export interface ServiceInfo {
   id: string;
   kind: string;
@@ -213,4 +225,6 @@ export const api = {
   listDatabases: (id: string) => invoke<DbInfo[]>("list_databases", { id }),
   createDatabase: (id: string, name: string) => invoke<void>("create_database", { id, name }),
   dropDatabase: (id: string, name: string) => invoke<void>("drop_database", { id, name }),
+  listLogs: () => invoke<LogSource[]>("list_logs"),
+  readLog: (path: string, from: number | null) => invoke<LogChunk>("read_log", { path, from }),
 };
