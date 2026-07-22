@@ -450,6 +450,93 @@ impl SqlDriver for MssqlDriver {
     }
 }
 
+/// tiberius never exposes PRINT / server info messages in its API — it only
+/// logs them (`event!(Level::INFO, "{}", info.message)` in tds/stream/token.rs).
+/// We capture those tracing events, correlated to the running query by a span
+/// carrying a query-scoped id, and forward them as QueryEvent::Message.
+pub(crate) mod msgs {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    fn sinks() -> &'static Mutex<HashMap<u64, Vec<String>>> {
+        static S: OnceLock<Mutex<HashMap<u64, Vec<String>>>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    pub fn register() -> u64 {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        sinks().lock().unwrap().insert(id, vec![]);
+        id
+    }
+    pub fn push(id: u64, m: String) {
+        if let Some(v) = sinks().lock().unwrap().get_mut(&id) {
+            if v.len() < 500 { v.push(m); } // bound: runaway PRINT loops can't grow unchecked
+        }
+    }
+    pub fn take(id: u64) -> Vec<String> {
+        sinks().lock().unwrap().remove(&id).unwrap_or_default()
+    }
+}
+
+/// tracing Layer that collects tiberius token-stream INFO events (PRINT output,
+/// "Changed database context…" env changes) into the enclosing query's sink.
+pub struct TiberiusMessageLayer;
+
+struct QidTag(u64);
+
+impl<S> tracing_subscriber::Layer<S> for TiberiusMessageLayer
+where
+    S: tracing::Subscriber + for<'l> tracing_subscriber::registry::LookupSpan<'l>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if attrs.metadata().name() != "mssql_msgs" { return; }
+        struct V(Option<u64>);
+        impl tracing::field::Visit for V {
+            fn record_u64(&mut self, f: &tracing::field::Field, v: u64) {
+                if f.name() == "qid" { self.0 = Some(v); }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        let mut v = V(None);
+        attrs.record(&mut v);
+        if let (Some(q), Some(span)) = (v.0, ctx.span(id)) {
+            span.extensions_mut().insert(QidTag(q));
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        // only the token-stream module logs server messages; connect-time noise
+        // (TLS handshake) lives elsewhere and outside any query span anyway
+        if *event.metadata().level() != tracing::Level::INFO
+            || !event.metadata().target().starts_with("tiberius")
+        {
+            return;
+        }
+        let Some(scope) = ctx.event_scope(event) else { return };
+        let mut qid = None;
+        for span in scope {
+            if let Some(t) = span.extensions().get::<QidTag>() { qid = Some(t.0); break; }
+        }
+        let Some(qid) = qid else { return };
+        struct M(Option<String>);
+        impl tracing::field::Visit for M {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                // the "message" field is fmt::Arguments: Debug == Display, no quoting
+                if f.name() == "message" { self.0 = Some(format!("{v:?}")); }
+            }
+        }
+        let mut m = M(None);
+        event.record(&mut m);
+        if let Some(msg) = m.0 { msgs::push(qid, msg); }
+    }
+}
+
 pub struct MssqlSession {
     client: SessionClient,
     spid: Option<String>,
@@ -460,6 +547,21 @@ impl QuerySession for MssqlSession {
     fn session_id(&self) -> Option<String> { self.spid.clone() }
 
     async fn stream(&mut self, sql: &str, tx: tokio::sync::mpsc::Sender<QueryEvent>) -> Result<(), AppError> {
+        use tracing::Instrument as _;
+        // run the batch inside a qid-tagged span so TiberiusMessageLayer can
+        // attribute PRINT/info messages emitted while polling this future
+        let qid = msgs::register();
+        let span = tracing::info_span!("mssql_msgs", qid = qid);
+        let res = self.stream_impl(sql, &tx).instrument(span).await;
+        for m in msgs::take(qid) {
+            let _ = tx.send(QueryEvent::Message(m)).await;
+        }
+        res
+    }
+}
+
+impl MssqlSession {
+    async fn stream_impl(&mut self, sql: &str, tx: &tokio::sync::mpsc::Sender<QueryEvent>) -> Result<(), AppError> {
         let first = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_lowercase();
         // DML goes through execute() for accurate affected-row counts.
         // EVERYTHING else must be a raw SQL batch (simple_query): execute()'s
@@ -626,6 +728,7 @@ mod session_test {
             match ev {
                 QueryEvent::Columns(c) => cols = c.len(),
                 QueryEvent::Rows(r) => rows += r.len(),
+                QueryEvent::Message(_) => {}
                 QueryEvent::Done { row_count, .. } => { done = true; assert_eq!(row_count as usize, rows); }
             }
         }
@@ -737,5 +840,31 @@ mod proc_batch_test {
         drop(s);
         d.drop_database("tabula_proc_test").await.ok();
         println!("CREATE PROCEDURE + EXEC via session OK");
+    }
+}
+
+#[cfg(test)]
+mod print_msg_test {
+    use super::*;
+    use crate::drivers::QueryEvent;
+
+    #[tokio::test]
+    #[ignore]
+    async fn print_output_is_captured_as_messages() {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing_subscriber::registry().with(TiberiusMessageLayer).try_init();
+
+        let d = MssqlDriver::connect("127.0.0.1", 1433, "sa", "YourStrongPassword123!", "master").await.expect("connect");
+        let mut s = d.acquire_session().await.expect("session");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        s.stream("DECLARE @i INT = 1;\nWHILE @i <= 3\nBEGIN\n  PRINT CONCAT('Iteration ', @i);\n  SET @i += 1;\nEND;", tx)
+            .await.expect("stream");
+        let mut msgs: Vec<String> = vec![];
+        while let Some(ev) = rx.recv().await {
+            if let QueryEvent::Message(m) = ev { msgs.push(m); }
+        }
+        println!("messages: {msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains("Iteration 1")), "missing Iteration 1: {msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains("Iteration 3")), "missing Iteration 3: {msgs:?}");
     }
 }

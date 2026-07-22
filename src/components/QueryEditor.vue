@@ -402,6 +402,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
 
     <div class="flex-1 flex min-h-0">
     <div class="flex-1 overflow-auto font-mono text-[12px]" @scroll="onScroll">
+      <pre v-if="run && run.columns.length && run.messages.length"
+        class="px-3 py-2 font-mono text-[11.5px] text-zinc-400 whitespace-pre-wrap border-b border-zinc-800">{{ run.messages.join("\n") }}</pre>
       <table v-if="run && run.columns.length" class="border-collapse min-w-full">
         <thead class="sticky top-0 bg-zinc-950 z-10">
           <tr>
@@ -463,6 +465,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
         </tbody>
       </table>
       <div v-else-if="run?.status === 'done'" class="p-3 text-xs text-zinc-500">
+        <pre v-if="run.messages.length"
+          class="mb-2 font-mono text-[11.5px] text-zinc-300 whitespace-pre-wrap">{{ run.messages.join("\n") }}</pre>
         OK — {{ run.affectedRows }} row(s) affected.
       </div>
       <div v-else-if="!run" class="h-full flex items-center justify-center text-zinc-600 text-xs">

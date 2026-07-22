@@ -35,6 +35,9 @@ bb8 = "0.8"
 bb8-tiberius = "0.15"
 tokio-util = { version = "0.7", features = ["compat"] }
 rust_decimal = "1"
+# capture tiberius's PRINT/info server messages (it only emits them via tracing)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 base64 = "0.22"
 russh = "0.45"
 russh-keys = "0.45"

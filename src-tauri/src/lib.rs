@@ -37,6 +37,13 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // capture tiberius server messages (PRINT etc.) — see drivers::mssql::TiberiusMessageLayer
+    {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing_subscriber::registry()
+            .with(crate::drivers::mssql::TiberiusMessageLayer)
+            .try_init();
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

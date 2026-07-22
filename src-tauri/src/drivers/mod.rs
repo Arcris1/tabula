@@ -168,6 +168,8 @@ pub struct TableColumns {
 pub enum QueryEvent {
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<serde_json::Value>>),
+    /// server info message (T-SQL PRINT / RAISERROR severity<11, like SSMS's Messages tab)
+    Message(String),
     Done { row_count: u64, affected_rows: u64 },
 }
 

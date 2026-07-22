@@ -10,6 +10,8 @@ export interface QueryRun {
   queryId: string;
   columns: ColumnMeta[];
   rows: unknown[][];
+  /** server info messages (T-SQL PRINT etc.) — SSMS's "Messages" */
+  messages: string[];
   status: "running" | "done" | "error";
   rowCount?: number;
   affectedRows?: number;
@@ -96,7 +98,7 @@ export const useQueriesStore = defineStore("queries", () => {
       // arrive unmatched (the invoke round-trip may resolve after query:done)
       const queryId = crypto.randomUUID();
       tab.runs.push({
-        queryId, columns: [], rows: [], status: "running",
+        queryId, columns: [], rows: [], messages: [], status: "running",
         sql: stmts[i], startedAtMs: Date.now(),
       });
       tab.activeRunIndex = i;
@@ -161,6 +163,7 @@ export const useQueriesStore = defineStore("queries", () => {
     if (!run) return;
     if (name === "query:columns") run.columns = payload.columns;
     else if (name === "query:rows") run.rows = run.rows.concat(payload.rows);
+    else if (name === "query:message") run.messages.push(payload.message);
     else if (name === "query:done") {
       run.status = "done";
       run.rowCount = payload.rowCount;
@@ -179,7 +182,7 @@ export const useQueriesStore = defineStore("queries", () => {
   async function initListeners() {
     if (listenersReady) return;
     listenersReady = true;
-    for (const name of ["query:columns", "query:rows", "query:done", "query:error"] as const) {
+    for (const name of ["query:columns", "query:rows", "query:message", "query:done", "query:error"] as const) {
       await listen(name, (e) => handleEvent(name, e.payload as any));
     }
   }

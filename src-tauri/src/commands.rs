@@ -400,6 +400,9 @@ pub async fn run_query(
                 QueryEvent::Rows(r) => {
                     let _ = fwd_win.emit("query:rows", serde_json::json!({"queryId": fwd_qid, "rows": r}));
                 }
+                QueryEvent::Message(m) => {
+                    let _ = fwd_win.emit("query:message", serde_json::json!({"queryId": fwd_qid, "message": m}));
+                }
                 QueryEvent::Done { row_count, affected_rows } => {
                     let _ = fwd_win.emit("query:done", serde_json::json!({
                         "queryId": fwd_qid,
