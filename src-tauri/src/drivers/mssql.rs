@@ -44,6 +44,18 @@ async fn connect_client(config: &Config) -> Result<SessionClient, AppError> {
 impl MssqlDriver {
     pub async fn connect(host: &str, port: u16, user: &str, password: &str, db: &str) -> Result<Self, AppError> {
         let config = build_config(host, port, user, password, db);
+        // Probe with a DIRECT connection first: bb8's pool.get() retries failed
+        // connects until its timeout and then reports only "timed out", hiding
+        // the real cause (bad login, unknown database, TLS). The probe surfaces
+        // the genuine error immediately.
+        let probe = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            connect_client(&config),
+        )
+        .await
+        .map_err(|_| AppError::timeout(format!("could not reach SQL Server at {host}:{port} within 8s")))??;
+        drop(probe);
+
         let mgr = Manager::build(config.clone()).map_err(AppError::from)?;
         let pool = bb8::Pool::builder()
             .max_size(10)
@@ -51,11 +63,6 @@ impl MssqlDriver {
             .build(mgr)
             .await
             .map_err(AppError::from)?;
-        // fail fast if credentials/host are wrong
-        {
-            let mut conn = pool.get().await?;
-            conn.query("SELECT 1", &[]).await?.into_first_result().await?;
-        }
         Ok(Self { pool, config })
     }
 
@@ -644,5 +651,41 @@ mod db_mgmt_test {
         let dbs2 = d.list_databases().await.expect("list2");
         assert!(!dbs2.iter().any(|x| x.name == "tabula_dbtest"), "db not dropped");
         println!("create/list/drop OK");
+    }
+}
+
+#[cfg(test)]
+mod no_db_test {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn connect_without_database() {
+        for host in ["127.0.0.1", "localhost"] {
+            let t = std::time::Instant::now();
+            match MssqlDriver::connect(host, 1433, "sa", "YourStrongPassword123!", "").await {
+                Ok(d) => {
+                    let dbs = d.list_databases().await.map(|v| v.len());
+                    println!("{host}: OK in {:?}, list_databases -> {:?}", t.elapsed(), dbs);
+                }
+                Err(e) => println!("{host}: ERR in {:?}: {:?}", t.elapsed(), e),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod err_surface_test {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn bad_password_reports_login_failure_not_timeout() {
+        let t = std::time::Instant::now();
+        let err = MssqlDriver::connect("127.0.0.1", 1433, "sa", "WrongPassword!", "")
+            .await.err().expect("must fail");
+        println!("err in {:?}: {}", t.elapsed(), err.message);
+        assert!(err.message.to_lowercase().contains("login"), "expected real login error, got: {}", err.message);
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "should fail fast, not wait out a pool timeout");
     }
 }
