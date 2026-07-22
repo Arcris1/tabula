@@ -58,6 +58,16 @@ function onConnected(id: string, p: "sql" | "kv") {
   showLauncher.value = false;
   ws.addConnection(id, p);
 }
+// open a specific database (from the Local Stack → Databases view) in the client
+async function openDbInClient(id: string, database: string) {
+  try {
+    const p = await conns.connect(id, database); // (re)connect to that database
+    appMode.value = "db";
+    await ws.openFresh(id, p);
+  } catch (e) {
+    appMode.value = "db"; // still switch back; the launcher/error surfaces there
+  }
+}
 
 function newTableForm() {
   mainTab.value = "structure";
@@ -261,13 +271,52 @@ function onKeydown(e: KeyboardEvent) {
   e.preventDefault();
   runAction(resolved);
 }
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+// ---- reconnect (network came back after being offline) ----
+const reconnecting = ref(false);
+const reconnectError = ref<string | null>(null);
+async function reconnectActive() {
+  if (!ws.activeId || reconnecting.value) return;
+  reconnecting.value = true;
+  reconnectError.value = null;
+  try {
+    await ws.reconnect(ws.activeId);
+  } catch (e: any) {
+    reconnectError.value = e?.message ?? String(e);
+  } finally {
+    reconnecting.value = false;
+  }
+}
+let wasOffline = false;
+async function onOnline() {
+  // only act on a real offline→online transition, and rebuild all open connections
+  if (!wasOffline) return;
+  wasOffline = false;
+  if (!ws.isOpen || reconnecting.value) return;
+  reconnecting.value = true;
+  reconnectError.value = null;
+  try {
+    await ws.reconnectAll();
+  } finally {
+    reconnecting.value = false;
+  }
+}
+function onOffline() { wasOffline = true; }
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("online", onOnline);
+  window.removeEventListener("offline", onOffline);
+});
 </script>
 
 <template>
   <main class="h-full flex flex-col">
-    <StackShell v-if="appMode === 'stack'" @exit="appMode = 'db'" />
+    <StackShell v-if="appMode === 'stack'" @exit="appMode = 'db'" @open-db="openDbInClient" />
     <template v-else>
     <ConnectionLauncher v-if="!ws.isOpen || showLauncher" :can-cancel="ws.isOpen"
       @connected="onConnected" @cancel="showLauncher = false" @settings="showSettings = true"
@@ -278,7 +327,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           class="text-zinc-500 hover:text-zinc-200 text-sm leading-none" title="Settings (⌘,)">⚙</button>
         <div class="w-px h-4 bg-zinc-800 mx-1"></div>
         <span v-if="active?.isProduction" class="text-[10px] uppercase tracking-wide text-red-400 border border-red-900 rounded px-1">prod</span>
-        <button @click="appMode = 'stack'" class="ml-auto text-xs text-zinc-500 hover:text-zinc-300" title="Local stack manager">Local Stack</button>
+        <span v-if="reconnectError" class="text-[11px] text-red-400 truncate max-w-56" :title="reconnectError">reconnect failed</span>
+        <button @click="reconnectActive" :disabled="reconnecting" class="ml-auto text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-50"
+          title="Rebuild this connection (use after the network drops)">
+          {{ reconnecting ? "Reconnecting…" : "Reconnect" }}
+        </button>
+        <button @click="appMode = 'stack'" class="text-xs text-zinc-500 hover:text-zinc-300" title="Local stack manager">Local Stack</button>
         <button @click="api.openNewWindow()" class="text-xs text-zinc-500 hover:text-zinc-300" title="New window (⌘⇧N)">New Window</button>
         <button @click="requestCloseConn(ws.activeId)"
           class="text-xs px-2 py-0.5 rounded border border-red-900/70 text-red-400 hover:bg-red-950/60">Disconnect</button>

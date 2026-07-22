@@ -143,10 +143,14 @@ pub async fn test_connection(
 }
 
 #[tauri::command]
-pub async fn connect(window: tauri::Window, state: State<'_, AppState>, id: String) -> Result<String, AppError> {
-    let cfg = state.store.lock().await.list()?
+pub async fn connect(window: tauri::Window, state: State<'_, AppState>, id: String, database: Option<String>) -> Result<String, AppError> {
+    let mut cfg = state.store.lock().await.list()?
         .into_iter().find(|c| c.id == id)
         .ok_or_else(|| AppError::internal(format!("unknown connection {id}")))?;
+    // optional override: connect to a specific database (opening one from the stack view)
+    if let Some(db) = database.filter(|d| !d.is_empty()) {
+        cfg.database = Some(db);
+    }
     let pw = CredentialStore::get(&id)?;
     let ssh_secret = CredentialStore::get(&format!("{id}.ssh"))?;
     let expected = match &cfg.ssh {
@@ -182,6 +186,21 @@ pub async fn disconnect(window: tauri::Window, state: State<'_, AppState>, id: S
     state.tunnels.remove(&key).await;  // ...then the tunnel
     let _ = window.set_title("Tabula");
     Ok(())
+}
+
+/// Rebuild a connection from scratch: drop its sessions, pool and SSH tunnel,
+/// then connect again. Used to recover a connection whose network died (e.g.
+/// laptop sleep / wifi off) without restarting the app — a dead SSH tunnel or
+/// pool won't heal on its own, so we tear the whole thing down and reopen.
+#[tauri::command]
+pub async fn reconnect(window: tauri::Window, state: State<'_, AppState>, id: String) -> Result<String, AppError> {
+    let key = scoped(&window, &id);
+    for s in state.sessions.drain_by_prefix(&format!("{key}:")).await {
+        discard_session(s);
+    }
+    state.registry.remove(&key).await;
+    state.tunnels.remove(&key).await;
+    connect(window, state, id, None).await
 }
 
 fn scoped(window: &tauri::Window, id: &str) -> String {

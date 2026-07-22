@@ -5,6 +5,7 @@ import { useConnectionsStore } from "../stores/connections";
 import ConfirmModal from "./ConfirmModal.vue";
 
 const conns = useConnectionsStore();
+const emit = defineEmits<{ open: [connectionId: string, database: string] }>();
 onMounted(() => conns.load());
 
 // only server engines have a "databases" concept
@@ -122,11 +123,15 @@ const colorClass: Record<string, string> = {
         <!-- list -->
         <div v-if="loading" class="text-xs text-zinc-500">Loading…</div>
         <ul v-else class="rounded-lg border border-zinc-800 divide-y divide-zinc-800/70">
-          <li v-for="d in dbs" :key="d.name" class="group flex items-center gap-3 px-3 py-2.5 hover:bg-zinc-900/50">
+          <li v-for="d in dbs" :key="d.name"
+            class="group flex items-center gap-3 px-3 py-2.5 hover:bg-zinc-900/50 cursor-pointer"
+            @dblclick="selected && emit('open', selected.id, d.name)">
             <span class="text-zinc-500">▤</span>
             <span class="text-sm text-zinc-200 flex-1 truncate">{{ d.name }}</span>
             <span class="text-xs text-zinc-500 font-mono">{{ fmtSize(d.sizeBytes) }}</span>
-            <button @click="dropTarget = d.name"
+            <button @click.stop="selected && emit('open', selected.id, d.name)"
+              class="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white opacity-0 group-hover:opacity-100">Open ↗</button>
+            <button @click.stop="dropTarget = d.name"
               class="text-xs px-2 py-1 rounded text-red-500/70 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100">Drop</button>
           </li>
           <li v-if="!dbs.length" class="px-3 py-4 text-xs text-zinc-600">No user databases.</li>

@@ -11,7 +11,16 @@ export interface SplitOptions {
   backslashEscapes?: boolean;
   /** MySQL also treats # as a line comment. */
   hashComments?: boolean;
+  /** T-SQL: a line consisting of GO (optionally `GO n`) separates batches and
+   *  is never sent to the server — it's an SSMS/sqlcmd convention, not SQL. */
+  goSeparator?: boolean;
+  /** set false (T-SQL) to keep `;` inside a batch: proc/trigger bodies contain
+   *  semicolons and must reach the server whole — only GO ends a batch. */
+  semicolons?: boolean;
 }
+
+/** matches a whole GO line at the given slice start: `GO`, `go 5`, trailing ws */
+const GO_LINE = /^[ \t]*go(?:[ \t]+\d+)?[ \t]*(?:\r?\n|$)/i;
 
 export function statements(text: string, opts: SplitOptions = {}): StatementRange[] {
   const out: StatementRange[] = [];
@@ -31,6 +40,17 @@ export function statements(text: string, opts: SplitOptions = {}): StatementRang
     const ch = text[i],
       next = text[i + 1];
     if (mode === "code") {
+      // GO batch separator: only recognized at the start of a line, so a
+      // column/variable literally named "go" mid-statement is never split on.
+      if (opts.goSeparator && (i === 0 || text[i - 1] === "\n")) {
+        const m = GO_LINE.exec(text.slice(i));
+        if (m) {
+          push(i); // close the batch before the GO line (GO itself is dropped)
+          i += m[0].length;
+          start = i;
+          continue;
+        }
+      }
       if (ch === "'") mode = "sq";
       else if (ch === '"') mode = "dq";
       else if (ch === "`") mode = "bq";
@@ -50,7 +70,7 @@ export function statements(text: string, opts: SplitOptions = {}): StatementRang
           mode = "dollar";
           i += m[0].length - 1;
         }
-      } else if (ch === ";") push(i);
+      } else if (ch === ";" && opts.semicolons !== false) push(i);
     } else if (mode === "sq" || mode === "dq" || mode === "bq") {
       if (opts.backslashEscapes && ch === "\\") i++; // mysql-style escape never closes the string
       else if ((mode === "sq" && ch === "'") || (mode === "dq" && ch === '"') || (mode === "bq" && ch === "`")) mode = "code";

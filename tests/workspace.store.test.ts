@@ -6,6 +6,7 @@ vi.mock("../src/lib/api", () => ({
     listTables: vi.fn().mockResolvedValue([]),
     listFunctions: vi.fn().mockResolvedValue([]),
     disconnect: vi.fn(),
+    reconnect: vi.fn().mockResolvedValue("sql"),
   },
 }));
 
@@ -35,6 +36,19 @@ describe("workspace store close()", () => {
     await ws.close();
     expect(ws.isOpen).toBe(false);
     expect(ws.activeId).toBe(null);
+  });
+
+  it("reconnect rebuilds the backend connection while preserving state", async () => {
+    (api.reconnect as any).mockResolvedValue("sql");
+    const ws = useWorkspaceStore();
+    await ws.addConnection("c1", "sql");
+    ws.selectTable({ schema: null, name: "keep_me", kind: "table" } as any);
+
+    await ws.reconnect("c1");
+    expect(api.reconnect).toHaveBeenCalledWith("c1");
+    // workspace state survives the reconnect
+    expect(ws.selectedTable?.name).toBe("keep_me");
+    expect(ws.isOpen).toBe(true);
   });
 
   it("keeps per-connection state and switches active when one is closed", async () => {

@@ -9,7 +9,7 @@ import MailView from "./MailView.vue";
 import ToolsView from "./ToolsView.vue";
 import SettingsView from "./SettingsView.vue";
 
-const emit = defineEmits<{ exit: [] }>();
+const emit = defineEmits<{ exit: []; openDb: [connectionId: string, database: string] }>();
 const services = useServicesStore();
 
 type Section = "dashboard" | "services" | "databases" | "logs" | "mail" | "tools" | "settings";
@@ -72,7 +72,7 @@ const titles: Record<Section, string> = {
 
       <DashboardView v-if="section === 'dashboard'" />
       <ServicesView v-else-if="section === 'services'" />
-      <DatabasesView v-else-if="section === 'databases'" />
+      <DatabasesView v-else-if="section === 'databases'" @open="(id, db) => emit('openDb', id, db)" />
       <LogsView v-else-if="section === 'logs'" />
       <MailView v-else-if="section === 'mail'" />
       <ToolsView v-else-if="section === 'tools'" />

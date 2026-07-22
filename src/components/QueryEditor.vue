@@ -158,8 +158,12 @@ function isMysql() {
   return conns.connections.find((c) => c.id === ws.activeId)?.engine === "mysql";
 }
 function splitOpts() {
-  const mysql = isMysql();
-  return { backslashEscapes: mysql, hashComments: mysql };
+  const engine = conns.connections.find((c) => c.id === ws.activeId)?.engine;
+  const mysql = engine === "mysql";
+  const mssql = engine === "mssql";
+  // T-SQL uses SSMS batch semantics: GO separates batches, `;` does not —
+  // a CREATE PROCEDURE body (which contains semicolons) must ship whole.
+  return { backslashEscapes: mysql, hashComments: mysql, goSeparator: mssql, semicolons: !mssql };
 }
 
 function runCurrent() {

@@ -19,8 +19,8 @@ export const useConnectionsStore = defineStore("connections", () => {
   async function test(cfg: ConnectionConfig, password?: string, sshSecret?: string) {
     await api.testConnection(cfg, password, sshSecret);
   }
-  async function connect(id: string) {
-    return api.connect(id);
+  async function connect(id: string, database?: string) {
+    return api.connect(id, database);
   }
   async function disconnect(id: string) {
     await api.disconnect(id);

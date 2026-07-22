@@ -61,3 +61,29 @@ describe("statements", () => {
     expect(s[1].text).toBe("SELECT 1");
   });
 });
+
+describe("T-SQL GO batches (mssql)", () => {
+  const tsql = { goSeparator: true, semicolons: false };
+
+  it("splits on GO lines and never sends GO itself", () => {
+    const s = statements("CREATE DATABASE d;\nGO\nUSE d;\nGO\nSELECT 1;", tsql);
+    expect(s.map((x) => x.text)).toEqual(["CREATE DATABASE d;", "USE d;", "SELECT 1;"]);
+  });
+
+  it("keeps semicolons inside a batch (proc bodies ship whole)", () => {
+    const proc = "CREATE PROCEDURE p AS\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND\nGO\nEXEC p;";
+    const s = statements(proc, tsql);
+    expect(s).toHaveLength(2);
+    expect(s[0].text).toContain("SELECT 1;");
+    expect(s[1].text).toBe("EXEC p;");
+  });
+
+  it("is case-insensitive, allows GO n, and ignores mid-line go", () => {
+    const s = statements("SELECT 'go' AS x\ngo 5\nSELECT let_go FROM t", tsql);
+    expect(s.map((x) => x.text)).toEqual(["SELECT 'go' AS x", "SELECT let_go FROM t"]);
+  });
+
+  it("GO at end of script and without trailing newline", () => {
+    expect(statements("SELECT 1\nGO", tsql).map((x) => x.text)).toEqual(["SELECT 1"]);
+  });
+});

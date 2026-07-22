@@ -62,6 +62,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (get(id)) activeId.value = id;
   }
 
+  /** Open a connection freshly (backend already connected, possibly to a
+   *  different database) — reset any existing state and reload its schema. */
+  async function openFresh(id: string, p: "sql" | "kv") {
+    const existing = get(id);
+    if (existing) {
+      existing.paradigm = p;
+      existing.tables = [];
+      existing.functions = [];
+      existing.selectedTable = null;
+      existing.openTables = [];
+      existing.pendingFilter = null;
+      existing.mainTab = "data";
+      activeId.value = id;
+      if (p === "sql") { await loadTables(); loadFunctions(); }
+    } else {
+      await addConnection(id, p);
+    }
+  }
+
   async function loadTables() {
     const c = activeConn.value;
     if (c) c.tables = await api.listTables(c.id);
@@ -101,6 +120,24 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
+  /** Rebuild a dead connection (network came back) without losing its
+   *  workspace state. Schema is unchanged, so we only re-fetch it for the
+   *  active connection to confirm connectivity. */
+  async function reconnect(id: string) {
+    const c = get(id);
+    if (!c) return;
+    const p = await api.reconnect(id); // throws if still unreachable
+    c.paradigm = p;
+    if (activeId.value === id && p === "sql") {
+      await loadTables();
+      loadFunctions();
+    }
+  }
+  /** Reconnect every open connection (best-effort; one failure doesn't block the rest). */
+  async function reconnectAll() {
+    await Promise.allSettled(conns.value.map((c) => reconnect(c.id)));
+  }
+
   /** Disconnect and remove ONE connection; switch active to a neighbour. */
   async function closeConnection(id: string) {
     const idx = conns.value.findIndex((c) => c.id === id);
@@ -133,7 +170,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   return {
     conns, activeId, isOpen,
     paradigm, tables, functions, selectedTable, openTables, pendingFilter, mainTab,
-    tableKey, get, addConnection, setActive, loadTables, loadFunctions,
-    selectTable, navigateToRow, closeTable, closeConnection, close,
+    tableKey, get, addConnection, setActive, openFresh, loadTables, loadFunctions,
+    selectTable, navigateToRow, closeTable, reconnect, reconnectAll, closeConnection, close,
   };
 });

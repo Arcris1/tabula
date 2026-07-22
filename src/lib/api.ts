@@ -183,7 +183,8 @@ export const api = {
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
   testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
     invoke<void>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
-  connect: (id: string) => invoke<"sql" | "kv">("connect", { id }),
+  connect: (id: string, database?: string) => invoke<"sql" | "kv">("connect", { id, database: database ?? null }),
+  reconnect: (id: string) => invoke<"sql" | "kv">("reconnect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   listTables: (id: string) => invoke<TableInfo[]>("list_tables", { id }),
   listFunctions: (id: string) => invoke<string[]>("list_functions", { id }),
