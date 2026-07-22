@@ -630,3 +630,10 @@ pub async fn open_external(target: String) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+#[tauri::command]
+pub async fn service_switch_version(kind: String, formula: String) -> Result<(), AppError> {
+    tokio::task::spawn_blocking(move || crate::services::switch_version(&kind, &formula))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+}

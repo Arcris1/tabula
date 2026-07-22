@@ -38,6 +38,22 @@ export const useServicesStore = defineStore("services", () => {
     }
   }
 
+  /** Switch which installed version of a service runs (e.g. php@8.3 → php@8.4). */
+  async function switchVersion(kind: string, formula: string) {
+    busy.value = new Set(busy.value).add(kind);
+    error.value = null;
+    try {
+      await api.serviceSwitchVersion(kind, formula);
+    } catch (e: any) {
+      error.value = `switch ${kind} to ${formula}: ${e?.message ?? String(e)}`;
+    } finally {
+      const b = new Set(busy.value);
+      b.delete(kind);
+      busy.value = b;
+      await load();
+    }
+  }
+
   async function startAll() {
     for (const s of services.value.filter((s) => s.manageable && !s.running)) {
       await act(s.id, "start");
@@ -49,5 +65,5 @@ export const useServicesStore = defineStore("services", () => {
     }
   }
 
-  return { services, loading, busy, error, load, act, startAll, stopAll };
+  return { services, loading, busy, error, load, act, switchVersion, startAll, stopAll };
 });

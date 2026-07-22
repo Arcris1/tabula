@@ -162,6 +162,12 @@ export interface PortStatus {
   open: boolean;
 }
 
+export interface VariantInfo {
+  formula: string;
+  label: string;
+  running: boolean;
+}
+
 export interface ServiceInfo {
   id: string;
   kind: string;
@@ -174,6 +180,7 @@ export interface ServiceInfo {
   manager: string;
   version?: string | null;
   port?: number | null;
+  variants: VariantInfo[];
 }
 
 export const api = {
@@ -227,6 +234,8 @@ export const api = {
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   serviceAction: (id: string, action: "start" | "stop" | "restart") =>
     invoke<void>("service_action", { id, action }),
+  serviceSwitchVersion: (kind: string, formula: string) =>
+    invoke<void>("service_switch_version", { kind, formula }),
   listDatabases: (id: string) => invoke<DbInfo[]>("list_databases", { id }),
   createDatabase: (id: string, name: string) => invoke<void>("create_database", { id, name }),
   dropDatabase: (id: string, name: string) => invoke<void>("drop_database", { id, name }),

@@ -26,6 +26,24 @@ pub struct ServiceInfo {
     pub manager: String,
     pub version: Option<String>,
     pub port: Option<u16>,
+    /// installed variants of this service (e.g. php, php@8.3, php@8.4) —
+    /// more than one means the user can switch which version runs
+    pub variants: Vec<VariantInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantInfo {
+    /// brew formula name (switch target)
+    pub formula: String,
+    /// short display label: "8.3" for php@8.3, "latest" for the unversioned formula
+    pub label: String,
+    pub running: bool,
+}
+
+/// "php@8.3" → "8.3"; "php" → "latest"
+fn variant_label(formula: &str) -> String {
+    formula.split('@').nth(1).map(str::to_string).unwrap_or_else(|| "latest".into())
 }
 
 struct Known {
@@ -156,6 +174,11 @@ pub fn list() -> Vec<ServiceInfo> {
         let chosen = matches.iter().find(|(_, s)| s == "started").or_else(|| matches.first()).copied();
         let running = chosen.map(|(_, s)| s == "started").unwrap_or(false) || port_open(k.port);
         let installed = !matches.is_empty() || which(k.version_bin);
+        let variants = matches.iter().map(|(n, s)| VariantInfo {
+            formula: n.clone(),
+            label: variant_label(n),
+            running: s == "started",
+        }).collect();
         ServiceInfo {
             id: chosen.map(|(n, _)| n.clone()).unwrap_or_else(|| k.brew.first().copied().unwrap_or(k.kind).to_string()),
             kind: k.kind.into(), category: k.category.into(), name: k.name.into(), description: k.description.into(),
@@ -164,8 +187,44 @@ pub fn list() -> Vec<ServiceInfo> {
             manager: if chosen.is_some() { "brew".into() } else { "unmanaged".into() },
             version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
             port: if k.port == 0 { None } else { Some(k.port) },
+            variants,
         }
     }).collect()
+}
+
+/// Switch which installed variant of a service runs (Laragon-style):
+/// stop+unlink every other variant of the kind (ports would collide), link the
+/// target for CLI use (`php` on PATH follows the switch), then start it.
+#[cfg(target_os = "macos")]
+pub fn switch_version(kind: &str, formula: &str) -> Result<(), AppError> {
+    let known = KNOWN.iter().find(|k| k.kind == kind)
+        .ok_or_else(|| AppError::internal(format!("unknown service kind {kind:?}")))?;
+    let belongs = |name: &str| known.brew.iter().any(|b| name == *b || name.starts_with(&format!("{b}@")));
+    if !belongs(formula) {
+        return Err(AppError::internal(format!("{formula:?} is not a {kind} formula")));
+    }
+    let brew = brew_path().ok_or_else(|| AppError::internal("Homebrew not found"))?;
+
+    for (name, status) in brew_services() {
+        if !belongs(&name) || name == formula { continue; }
+        if status == "started" {
+            let _ = std::process::Command::new(&brew).args(["services", "stop", &name]).output();
+        }
+        let _ = std::process::Command::new(&brew).args(["unlink", &name]).output();
+    }
+    // versioned formulae are keg-only → --force; best-effort (service start is the point)
+    let _ = std::process::Command::new(&brew).args(["link", "--overwrite", "--force", formula]).output();
+
+    let out = std::process::Command::new(&brew).args(["services", "start", formula]).output()?;
+    if !out.status.success() {
+        return Err(AppError::internal(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn switch_version(_kind: &str, _formula: &str) -> Result<(), AppError> {
+    Err(AppError::internal("version switching is only supported via Homebrew on macOS for now"))
 }
 
 #[cfg(target_os = "macos")]
@@ -215,6 +274,7 @@ pub fn list() -> Vec<ServiceInfo> {
             manager: if matched.is_some() { "winservice".into() } else { "unmanaged".into() },
             version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
             port: if k.port == 0 { None } else { Some(k.port) },
+            variants: vec![],
         }
     }).collect()
 }
@@ -248,6 +308,7 @@ pub fn list() -> Vec<ServiceInfo> {
             manageable: false, manager: "unmanaged".into(),
             version: if installed { binary_version(k.version_bin, k.version_arg) } else { None },
             port: if k.port == 0 { None } else { Some(k.port) },
+            variants: vec![],
         }
     }).collect()
 }
@@ -270,6 +331,13 @@ mod tests {
     }
 
     #[test]
+    fn variant_labels() {
+        assert_eq!(variant_label("php@8.3"), "8.3");
+        assert_eq!(variant_label("postgresql@17"), "17");
+        assert_eq!(variant_label("php"), "latest");
+    }
+
+    #[test]
     fn known_services_cover_db_engines() {
         let kinds: Vec<_> = KNOWN.iter().map(|k| k.kind).collect();
         assert!(kinds.contains(&"mysql") && kinds.contains(&"postgres") && kinds.contains(&"redis"));
@@ -282,8 +350,7 @@ mod live {
     #[ignore]
     fn print_detected() {
         for s in super::list() {
-            println!("{:10} running={:5} manageable={:5} manager={:10} version={:?} id={}",
-                s.kind, s.running, s.manageable, s.manager, s.version, s.id);
+            println!("{:10} running={:5} id={:20} variants={:?}", s.kind, s.running, s.id, s.variants.iter().map(|v| format!("{}{}", v.label, if v.running { "*" } else { "" })).collect::<Vec<_>>());
         }
     }
 }

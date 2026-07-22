@@ -1,9 +1,31 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
+import type { ServiceInfo } from "../lib/api";
 import { useServicesStore } from "../stores/services";
+import ConfirmModal from "./ConfirmModal.vue";
 
 const store = useServicesStore();
 onMounted(() => store.load());
+
+// version switching (Laragon-style): pick which installed variant runs
+const pendingSwitch = ref<{ kind: string; name: string; formula: string } | null>(null);
+function activeFormula(s: ServiceInfo): string {
+  return s.variants.find((v) => v.running)?.formula ?? s.id;
+}
+function requestSwitch(s: ServiceInfo, formula: string) {
+  if (formula === activeFormula(s)) return;
+  if (s.kind === "mysql" || s.kind === "mariadb") {
+    // MySQL variants share a data directory; downgrading against upgraded data can corrupt it
+    pendingSwitch.value = { kind: s.kind, name: s.name, formula };
+    return;
+  }
+  store.switchVersion(s.kind, formula);
+}
+function confirmSwitch() {
+  const p = pendingSwitch.value;
+  pendingSwitch.value = null;
+  if (p) store.switchVersion(p.kind, p.formula);
+}
 
 const kindStyle: Record<string, string> = {
   nginx: "bg-emerald-600", apache: "bg-red-600", php: "bg-indigo-600", node: "bg-green-600",
@@ -59,7 +81,15 @@ const groups = computed(() =>
 
         <!-- footer: version + actions -->
         <div class="flex items-center gap-2 mt-auto">
-          <span v-if="s.version"
+          <select v-if="s.variants.length > 1" :value="activeFormula(s)" :disabled="store.busy.has(s.kind)"
+            @change="requestSwitch(s, ($event.target as HTMLSelectElement).value)"
+            title="Switch which installed version runs"
+            class="text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-emerald-400/90 outline-none focus:border-blue-600 disabled:opacity-50">
+            <option v-for="v in s.variants" :key="v.formula" :value="v.formula">
+              {{ v.label }}{{ v.running ? " ●" : "" }}
+            </option>
+          </select>
+          <span v-else-if="s.version"
             class="text-[11px] font-mono px-2 py-0.5 rounded border border-zinc-800 text-emerald-400/90">{{ s.version }}</span>
           <div class="ml-auto flex items-center gap-1.5">
             <template v-if="s.installed && s.manageable">
@@ -84,5 +114,10 @@ const groups = computed(() =>
     <div v-if="!store.services.length && !store.loading" class="text-center text-zinc-600 text-xs py-12">
       No services detected.
     </div>
+
+    <ConfirmModal v-if="pendingSwitch" :title="`Switch ${pendingSwitch.name} version`"
+      :message="`${pendingSwitch.name} versions share one data directory. Switching to ${pendingSwitch.formula} against data written by a newer version can corrupt it — back up first if unsure.`"
+      confirm-label="Switch version" danger
+      @confirm="confirmSwitch" @cancel="pendingSwitch = null" />
   </div>
 </template>
