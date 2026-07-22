@@ -87,3 +87,29 @@ describe("T-SQL GO batches (mssql)", () => {
     expect(statements("SELECT 1\nGO", tsql).map((x) => x.text)).toEqual(["SELECT 1"]);
   });
 });
+
+describe("regression: user's exact proc script", () => {
+  it("splits into 4 batches with CREATE PROCEDURE first in its batch", () => {
+    const doc = `USE ProcLecturesDB;
+GO
+SELECT * FROM dbo.Customers;
+GO
+CREATE PROCEDURE dbo.GetActiveCustomers
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT CustomerID, FirstName, LastName, Email, City
+    FROM Customers
+    WHERE IsActive = 1;
+END;
+GO
+EXEC GetActiveCustomers;`;
+    const s = statements(doc, { goSeparator: true, semicolons: false });
+    expect(s.map((x) => x.text.split("\n")[0])).toEqual([
+      "USE ProcLecturesDB;",
+      "SELECT * FROM dbo.Customers;",
+      "CREATE PROCEDURE dbo.GetActiveCustomers",
+      "EXEC GetActiveCustomers;",
+    ]);
+  });
+});

@@ -461,14 +461,19 @@ impl QuerySession for MssqlSession {
 
     async fn stream(&mut self, sql: &str, tx: tokio::sync::mpsc::Sender<QueryEvent>) -> Result<(), AppError> {
         let first = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-        let row_producing = matches!(first.as_str(), "select" | "with" | "exec" | "execute");
-        if !row_producing {
+        // DML goes through execute() for accurate affected-row counts.
+        // EVERYTHING else must be a raw SQL batch (simple_query): execute()'s
+        // sp_executesql-style wrapping rejects CREATE PROCEDURE (error 156)
+        // and silently discards USE database-context changes between batches.
+        // simple_query gives true SSMS batch semantics AND still streams rows,
+        // so DECLARE…SELECT, IF…SELECT etc. work too.
+        if matches!(first.as_str(), "insert" | "update" | "delete" | "merge") {
             let res = self.client.execute(sql, &[]).await?;
             let affected: u64 = res.rows_affected().iter().sum();
             let _ = tx.send(QueryEvent::Done { row_count: 0, affected_rows: affected }).await;
             return Ok(());
         }
-        let mut stream = self.client.query(sql, &[]).await?;
+        let mut stream = self.client.simple_query(sql).await?;
         let mut sent_cols = false;
         let mut chunk: Vec<Vec<serde_json::Value>> = vec![];
         let mut row_count = 0u64;
@@ -687,5 +692,50 @@ mod err_surface_test {
         println!("err in {:?}: {}", t.elapsed(), err.message);
         assert!(err.message.to_lowercase().contains("login"), "expected real login error, got: {}", err.message);
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "should fail fast, not wait out a pool timeout");
+    }
+}
+
+#[cfg(test)]
+mod proc_batch_test {
+    use super::*;
+    use crate::drivers::{QueryEvent, SqlDriver};
+
+    async fn run_batch(sess: &mut Box<dyn crate::drivers::QuerySession>, sql: &str) -> Result<(), crate::error::AppError> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let r = sess.stream(sql, tx).await;
+        while rx.recv().await.is_some() {}
+        r
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn create_procedure_batch_via_session() {
+        let d = MssqlDriver::connect("127.0.0.1", 1433, "sa", "YourStrongPassword123!", "master").await.expect("connect");
+        let mut s = d.acquire_session().await.expect("session");
+        run_batch(&mut s, "IF DB_ID('tabula_proc_test') IS NULL CREATE DATABASE tabula_proc_test;").await.expect("createdb");
+        run_batch(&mut s, "USE tabula_proc_test;").await.expect("use");
+        // USE must persist to the NEXT batch (raw-batch semantics, like SSMS)
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        s.stream("SELECT DB_NAME() AS db;", tx).await.expect("dbname");
+        let mut db = String::new();
+        while let Some(ev) = rx.recv().await {
+            if let QueryEvent::Rows(r) = ev {
+                if let Some(serde_json::Value::String(n)) = r.first().and_then(|row| row.first()) { db = n.clone(); }
+            }
+        }
+        assert_eq!(db, "tabula_proc_test", "USE did not persist across batches");
+        let _ = run_batch(&mut s, "DROP PROCEDURE IF EXISTS dbo.TestProc;").await;
+        // the exact shape the splitter emits: CREATE PROCEDURE first in batch, semicolons inside
+        run_batch(&mut s, "CREATE PROCEDURE dbo.TestProc\nAS\nBEGIN\n    SET NOCOUNT ON;\n    SELECT 1 AS x;\nEND;").await.expect("create proc");
+        // and EXEC streams rows
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        s.stream("EXEC dbo.TestProc;", tx).await.expect("exec");
+        let mut rows = 0;
+        while let Some(ev) = rx.recv().await { if let QueryEvent::Rows(r) = ev { rows += r.len(); } }
+        assert_eq!(rows, 1, "EXEC should return 1 row");
+        run_batch(&mut s, "USE master;").await.ok();
+        drop(s);
+        d.drop_database("tabula_proc_test").await.ok();
+        println!("CREATE PROCEDURE + EXEC via session OK");
     }
 }
