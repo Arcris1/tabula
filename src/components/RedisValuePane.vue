@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { api, type RedisEntry, type RedisValue } from "../lib/api";
+import { tryPhpFormat } from "../lib/phpSerialize";
 import { useConnectionsStore } from "../stores/connections";
 import { useSettingsStore } from "../stores/settings";
 import { useWorkspaceStore } from "../stores/workspace";
 import ConfirmModal from "./ConfirmModal.vue";
+import JsonNode from "./JsonNode";
 
 const props = defineProps<{ entry: RedisEntry | null }>();
 const emit = defineEmits<{ changed: []; deleted: [] }>();
@@ -34,6 +36,7 @@ const confirmDelete = ref(false);
 watch(() => props.entry, () => {
   editing.value = false;
   parseError.value = null;
+  showRaw.value = false;
   ttlInput.value = props.entry && props.entry.ttlSecs > 0 ? props.entry.ttlSecs : null;
 });
 
@@ -64,6 +67,12 @@ function pretty(s: string): string {
     return s;
   }
 }
+
+// PHP-serialized values (Laravel sessions/cache) render as a collapsible tree
+const showRaw = ref(false);
+const phpParsed = computed<unknown | null>(() =>
+  props.entry?.value.type === "string" ? tryPhpFormat(props.entry.value.value) : null,
+);
 
 function encode(entry: RedisEntry): string {
   const v = entry.value;
@@ -168,9 +177,20 @@ async function doDelete() {
       </div>
 
       <div v-else class="flex-1 overflow-auto p-3 font-mono text-[12px]">
-        <pre v-if="entry.value.type === 'string'" class="whitespace-pre-wrap">{{
-          looksJson(entry.value.value) ? pretty(entry.value.value) : entry.value.value
-        }}</pre>
+        <template v-if="entry.value.type === 'string'">
+          <div v-if="phpParsed !== null" class="flex items-center gap-2 mb-2 font-sans">
+            <span class="text-[10px] uppercase tracking-wide text-indigo-300 border border-indigo-900 rounded px-1"
+              title="PHP serialize() format — a Laravel session/cache payload">php serialized</span>
+            <button @click="showRaw = !showRaw"
+              class="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800">
+              {{ showRaw ? "Formatted" : "Raw" }}
+            </button>
+          </div>
+          <JsonNode v-if="phpParsed !== null && !showRaw" :value="phpParsed" :depth="0" />
+          <pre v-else class="whitespace-pre-wrap">{{
+            looksJson(entry.value.value) ? pretty(entry.value.value) : entry.value.value
+          }}</pre>
+        </template>
         <table v-else-if="entry.value.type === 'hash'" class="border-collapse">
           <tr v-for="[f, v] in entry.value.fields" :key="f">
             <td class="pr-4 py-0.5 text-zinc-400 border-b border-zinc-900 align-top">{{ f }}</td>
