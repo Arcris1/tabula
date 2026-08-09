@@ -9,10 +9,8 @@ pub mod error;
 pub mod history;
 pub mod impexp;
 pub mod known_hosts;
-pub mod logs;
 pub mod queries;
 pub mod registry;
-pub mod services;
 pub mod sessions;
 
 use config::ConfigStore;
@@ -111,16 +109,9 @@ pub fn run() {
             commands::open_new_window,
             commands::close_session,
             commands::forget_host_key,
-            commands::list_services,
-            commands::service_action,
-            commands::service_switch_version,
             commands::list_databases,
             commands::create_database,
             commands::drop_database,
-            commands::list_logs,
-            commands::read_log,
-            commands::check_ports,
-            commands::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

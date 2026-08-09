@@ -11,7 +11,7 @@ import RedisValuePane from "./components/RedisValuePane.vue";
 import SchemaSidebar from "./components/SchemaSidebar.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import ShortcutHelpModal from "./components/ShortcutHelpModal.vue";
-import StackShell from "./components/StackShell.vue";
+import DatabasesView from "./components/DatabasesView.vue";
 import StructureView from "./components/StructureView.vue";
 import { api, type RedisEntry } from "./lib/api";
 import { bindings, comboOf, detectPlatform } from "./lib/keymap";
@@ -36,7 +36,7 @@ const colorClass: Record<string, string> = {
   amber: "bg-amber-500", red: "bg-red-500",
 };
 
-const appMode = ref<"db" | "stack">("db"); // database client vs local-stack manager
+const appMode = ref<"db" | "dbs">("db"); // client vs the Databases manager screen
 const redisEntry = ref<RedisEntry | null>(null);
 async function loadKey(key: string) {
   if (ws.activeId) redisEntry.value = await api.getRedisValue(ws.activeId, key);
@@ -58,7 +58,7 @@ function onConnected(id: string, p: "sql" | "kv") {
   showLauncher.value = false;
   ws.addConnection(id, p);
 }
-// open a specific database (from the Local Stack → Databases view) in the client
+// open a specific database (from the Databases screen) in the client
 async function openDbInClient(id: string, database: string) {
   try {
     const p = await conns.connect(id, database); // (re)connect to that database
@@ -316,11 +316,18 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="h-full flex flex-col">
-    <StackShell v-if="appMode === 'stack'" @exit="appMode = 'db'" @open-db="openDbInClient" />
+    <template v-if="appMode === 'dbs'">
+      <header class="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800">
+        <button @click="appMode = 'db'" class="text-xs text-zinc-500 hover:text-zinc-300">← Back</button>
+        <span class="text-xs font-medium text-zinc-200">Databases</span>
+        <span class="text-[11px] text-zinc-600">create, drop and open databases per connection</span>
+      </header>
+      <DatabasesView @open="openDbInClient" />
+    </template>
     <template v-else>
     <ConnectionLauncher v-if="!ws.isOpen || showLauncher" :can-cancel="ws.isOpen"
       @connected="onConnected" @cancel="showLauncher = false" @settings="showSettings = true"
-      @stack="appMode = 'stack'" />
+      @databases="appMode = 'dbs'" />
     <template v-else>
       <header class="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800">
         <button @click="showSettings = true"
@@ -332,7 +339,7 @@ onBeforeUnmount(() => {
           title="Rebuild this connection (use after the network drops)">
           {{ reconnecting ? "Reconnecting…" : "Reconnect" }}
         </button>
-        <button @click="appMode = 'stack'" class="text-xs text-zinc-500 hover:text-zinc-300" title="Local stack manager">Local Stack</button>
+        <button @click="appMode = 'dbs'" class="text-xs text-zinc-500 hover:text-zinc-300" title="Create, drop and open databases">Databases</button>
         <button @click="api.openNewWindow()" class="text-xs text-zinc-500 hover:text-zinc-300" title="New window (⌘⇧N)">New Window</button>
         <button @click="requestCloseConn(ws.activeId)"
           class="text-xs px-2 py-0.5 rounded border border-red-900/70 text-red-400 hover:bg-red-950/60">Disconnect</button>

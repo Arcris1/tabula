@@ -547,21 +547,7 @@ pub async fn cancel_query(state: State<'_, AppState>, query_id: String) -> Resul
     Ok(())
 }
 
-// ---- local-stack service management ----
 
-#[tauri::command]
-pub async fn list_services() -> Result<Vec<crate::services::ServiceInfo>, AppError> {
-    tokio::task::spawn_blocking(crate::services::list)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-}
-
-#[tauri::command]
-pub async fn service_action(id: String, action: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || crate::services::action(&id, &action))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-}
 
 // ---- database management (local-stack Databases view) ----
 
@@ -589,51 +575,3 @@ pub async fn drop_database(window: tauri::Window, state: State<'_, AppState>, id
     }
 }
 
-// ---- log tailing (local-stack Logs view) ----
-
-#[tauri::command]
-pub async fn list_logs() -> Result<Vec<crate::logs::LogSource>, AppError> {
-    tokio::task::spawn_blocking(crate::logs::list)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-}
-
-#[tauri::command]
-pub async fn read_log(path: String, from: Option<u64>) -> Result<crate::logs::LogChunk, AppError> {
-    tokio::task::spawn_blocking(move || crate::logs::read(&path, from))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-}
-
-// ---- local-stack Tools / Mailpit ----
-
-#[tauri::command]
-pub async fn check_ports(ports: Vec<u16>) -> Result<Vec<crate::services::PortStatus>, AppError> {
-    tokio::task::spawn_blocking(move || crate::services::check_ports(&ports))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-}
-
-/// Open a URL or filesystem path with the OS default handler (browser/Finder).
-#[tauri::command]
-pub async fn open_external(target: String) -> Result<(), AppError> {
-    #[cfg(target_os = "macos")]
-    let (cmd, args): (&str, Vec<&str>) = ("open", vec![target.as_str()]);
-    #[cfg(target_os = "windows")]
-    let (cmd, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", target.as_str()]);
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let (cmd, args): (&str, Vec<&str>) = ("xdg-open", vec![target.as_str()]);
-
-    let status = std::process::Command::new(cmd).args(&args).status()?;
-    if !status.success() {
-        return Err(AppError::internal(format!("failed to open {target}")));
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn service_switch_version(kind: String, formula: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || crate::services::switch_version(&kind, &formula))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-}

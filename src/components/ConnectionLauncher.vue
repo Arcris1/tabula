@@ -6,7 +6,7 @@ import { useShortcutsStore } from "../stores/shortcuts";
 import ConnectionForm from "./ConnectionForm.vue";
 
 defineProps<{ canCancel?: boolean }>();
-const emit = defineEmits<{ connected: [id: string, paradigm: "sql" | "kv"]; settings: []; cancel: []; stack: [] }>();
+const emit = defineEmits<{ connected: [id: string, paradigm: "sql" | "kv"]; settings: []; cancel: []; databases: [] }>();
 const store = useConnectionsStore();
 const editing = ref<ConnectionConfig | null>(null);
 const showForm = ref(false);
@@ -117,7 +117,7 @@ function onKeydown(e: KeyboardEvent) {
           {{ filtered.length }} connection{{ filtered.length === 1 ? "" : "s" }}
         </span>
         <div class="flex items-center gap-3 text-[11px] text-zinc-500">
-          <button @click="emit('stack')" class="hover:text-zinc-300">Local Stack</button>
+          <button @click="emit('databases')" class="hover:text-zinc-300">Databases</button>
           <button @click="emit('settings')" class="hover:text-zinc-300" title="Settings (⌘,)">Settings</button>
           <button v-if="canCancel" @click="emit('cancel')" class="hover:text-zinc-300">← Back</button>
         </div>

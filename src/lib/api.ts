@@ -146,43 +146,6 @@ export interface DbInfo {
   sizeBytes?: number | null;
 }
 
-export interface LogSource {
-  id: string;
-  label: string;
-  category: string;
-  path: string;
-}
-export interface LogChunk {
-  content: string;
-  offset: number;
-  size: number;
-}
-export interface PortStatus {
-  port: number;
-  open: boolean;
-}
-
-export interface VariantInfo {
-  formula: string;
-  label: string;
-  running: boolean;
-}
-
-export interface ServiceInfo {
-  id: string;
-  kind: string;
-  category: string;
-  name: string;
-  description: string;
-  running: boolean;
-  installed: boolean;
-  manageable: boolean;
-  manager: string;
-  version?: string | null;
-  port?: number | null;
-  variants: VariantInfo[];
-}
-
 export const api = {
   listConnections: () => invoke<ConnectionConfig[]>("list_connections"),
   saveConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
@@ -231,16 +194,7 @@ export const api = {
   applyDdl: (id: string, op: DdlOp) => invoke<void>("apply_ddl", { id, op }),
   openNewWindow: () => invoke<void>("open_new_window"),
   forgetHostKey: (host: string, port: number) => invoke<void>("forget_host_key", { host, port }),
-  listServices: () => invoke<ServiceInfo[]>("list_services"),
-  serviceAction: (id: string, action: "start" | "stop" | "restart") =>
-    invoke<void>("service_action", { id, action }),
-  serviceSwitchVersion: (kind: string, formula: string) =>
-    invoke<void>("service_switch_version", { kind, formula }),
   listDatabases: (id: string) => invoke<DbInfo[]>("list_databases", { id }),
   createDatabase: (id: string, name: string) => invoke<void>("create_database", { id, name }),
   dropDatabase: (id: string, name: string) => invoke<void>("drop_database", { id, name }),
-  listLogs: () => invoke<LogSource[]>("list_logs"),
-  readLog: (path: string, from: number | null) => invoke<LogChunk>("read_log", { path, from }),
-  checkPorts: (ports: number[]) => invoke<PortStatus[]>("check_ports", { ports }),
-  openExternal: (target: string) => invoke<void>("open_external", { target }),
 };
