@@ -113,11 +113,14 @@ export interface StructColumn { name: string; dataType: string; nullable: boolea
 export interface StructIndex { name: string; columns: string[]; unique: boolean }
 export interface StructTrigger { name: string; timing: string; event: string }
 export interface TableStructure { columns: StructColumn[]; indexes: StructIndex[]; triggers: StructTrigger[]; comment?: string | null }
-export interface ColumnDef { name: string; dataType: string; nullable: boolean; isPk: boolean }
+export interface ColumnDef { name: string; dataType: string; nullable: boolean; isPk: boolean; default?: string | null }
 export type DdlOp =
   | { op: "createTable"; name: string; columns: ColumnDef[] }
   | { op: "addColumn"; table: TableInfo; column: ColumnDef }
   | { op: "dropColumn"; table: TableInfo; column: string }
+  | { op: "alterColumn"; table: TableInfo; column: string; dataType: string; nullable: boolean }
+  | { op: "renameColumn"; table: TableInfo; column: string; newName: string }
+  | { op: "renameTable"; table: TableInfo; newName: string }
   | { op: "addIndex"; table: TableInfo; name: string; columns: string[]; unique: boolean }
   | { op: "dropIndex"; table: TableInfo; name: string }
   | { op: "dropTable"; table: TableInfo }
@@ -159,8 +162,14 @@ export const api = {
   listTables: (id: string) => invoke<TableInfo[]>("list_tables", { id }),
   listFunctions: (id: string) => invoke<string[]>("list_functions", { id }),
   functionDefinition: (id: string, name: string) => invoke<string>("function_definition", { id, name }),
-  exportTable: (id: string, table: TableInfo, format: "csv" | "json", path: string) =>
-    invoke<number>("export_table", { id, table, format, path }),
+  exportTable: (
+    id: string,
+    table: TableInfo,
+    format: "csv" | "json",
+    path: string,
+    sort?: Sort | null,
+    filters?: Filter[],
+  ) => invoke<number>("export_table", { id, table, format, path, sort: sort ?? null, filters: filters ?? [] }),
   importTable: (id: string, table: TableInfo, format: "csv" | "json" | "sql", path: string) =>
     invoke<{ inserted: number }>("import_table", { id, table, format, path }),
   fetchRows: (id: string, table: TableInfo, opts: FetchOptions) =>

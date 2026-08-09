@@ -82,14 +82,20 @@ function inspectorSetNull(column: string) {
 }
 
 // "start-end of ~total" range display
+// True when the last fetch peeked a row beyond the visible page (we request
+// PAGE+1, show PAGE). Deterministic end-of-data — no more "Next → empty grid".
+const hasMore = ref(false);
 const rangeLabel = computed(() => {
   if (!rows.value.length) return "0 rows";
   const start = pageIndex.value * PAGE + 1;
   const end = start + rows.value.length - 1;
   const total = page.value?.totalEstimate;
-  return total != null ? `${start}-${end} of ${total < end ? end : total}` : `${start}-${end}`;
+  // total is an engine ESTIMATE (information_schema / sys.partitions) — mark it
+  // approximate rather than implying an exact count that jumps around.
+  if (total == null) return `${start}-${end}`;
+  return end > total ? `${start}-${end} of ~${end}` : `${start}-${end} of ~${total}`;
 });
-const hasNextPage = computed(() => rows.value.length === PAGE);
+const hasNextPage = computed(() => hasMore.value);
 
 const columnNames = computed(() => (page.value?.columns ?? []).map((c) => c.name));
 const range = computed(() => visibleRange(scrollTop.value, viewportH.value, ROW_H, rows.value.length));
@@ -104,8 +110,10 @@ async function load(resetPage: boolean) {
   selectedRow.value = null;
   try {
     const p = await api.fetchRows(ws.activeId, ws.selectedTable, {
-      limit: PAGE, offset: pageIndex.value * PAGE, sort: sort.value, filters: filters.value,
+      limit: PAGE + 1, offset: pageIndex.value * PAGE, sort: sort.value, filters: filters.value,
     });
+    hasMore.value = p.rows.length > PAGE;
+    if (hasMore.value) p.rows = p.rows.slice(0, PAGE); // drop the peeked row
     page.value = p;
     rows.value = p.rows;
     if (scroller.value) scroller.value.scrollTop = 0;
@@ -117,6 +125,13 @@ async function load(resetPage: boolean) {
 }
 function nextPage() { if (hasNextPage.value) { pageIndex.value++; load(false); } }
 function prevPage() { if (pageIndex.value > 0) { pageIndex.value--; load(false); } }
+
+// Full-result export: the whole table under the ACTIVE filters+sort (not just the
+// visible page), streamed server-side. Wired into ResultActions' Export buttons.
+async function exportCurrent(format: "csv" | "json", path: string): Promise<number> {
+  if (!ws.activeId || !ws.selectedTable) throw new Error("no table selected");
+  return api.exportTable(ws.activeId, ws.selectedTable, format, path, sort.value, filters.value);
+}
 
 async function loadPk() {
   if (!ws.activeId || !ws.selectedTable) return;
@@ -261,7 +276,10 @@ const unregisters = [
   shortcuts.register("grid:commit", () => { if (cs.count > 0) commit(); }),
   shortcuts.register("grid:discard", () => { if (cs.count > 0) discard(); }),
   shortcuts.register("grid:insertRow", () => { if (cs.editable) cs.addDraft(columnNames.value); }),
-  shortcuts.register("grid:focusFilter", () => filterInputs.value[0]?.focus()),
+  shortcuts.register("grid:focusFilter", () => {
+    showFilters.value = true; // reveal the filter row first — it's collapsed by default
+    nextTick(() => filterInputs.value[0]?.focus());
+  }),
 ];
 onBeforeUnmount(() => unregisters.forEach((u) => u()));
 </script>
@@ -388,7 +406,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
           class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
           :class="showColumnsPicker || hiddenCols.size ? 'text-blue-400' : ''">Columns</button>
         <ResultActions :columns="columnNames" :rows="rows"
-          :selected="selectedRow !== null ? rows[selectedRow] : null" :table="ws.selectedTable?.name" />
+          :selected="selectedRow !== null ? rows[selectedRow] : null" :table="ws.selectedTable?.name"
+          rows-scope="page" :server-export="exportCurrent" />
         <button @click="prevPage" :disabled="pageIndex === 0"
           class="px-1 disabled:opacity-30 hover:text-zinc-200">‹</button>
         <button @click="nextPage" :disabled="!hasNextPage"

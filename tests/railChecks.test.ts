@@ -102,3 +102,55 @@ describe("hardened guards (persona-panel findings)", () => {
     expect(checkStatements(["EXEC dbo.purge_all"], rails, false)).toBeNull();
   });
 });
+
+describe("batch classification (persona S1 / #4 bypasses)", () => {
+  const rails = { warnNoWhere: true, warnDropTruncate: true, warnProductionWrites: true };
+
+  it("a MSSQL batch led by SET NOCOUNT no longer hides a wildcard DELETE", () => {
+    const w = checkStatements(["SET NOCOUNT ON; DELETE FROM dbo.customers;"], rails, false);
+    expect(w?.message).toContain("No WHERE");
+  });
+
+  it("a batch led by SELECT no longer hides a DROP TABLE", () => {
+    const w = checkStatements(["SELECT 1; DROP TABLE dbo.customers;"], rails, false);
+    expect(w?.message).toContain("DROP");
+  });
+
+  it("ALTER TABLE ... DROP COLUMN is flagged as destructive", () => {
+    const w = checkStatements(["ALTER TABLE users DROP COLUMN email"], rails, false);
+    expect(w?.title).toContain("DROP");
+  });
+
+  it("every write in a multi-statement batch is flagged on production", () => {
+    const w = checkStatements(["INSERT INTO a VALUES (1); UPDATE b SET x = 1 WHERE id = 2"], rails, true);
+    expect(w?.message).toContain("INSERT");
+    expect(w?.message).toContain("UPDATE");
+  });
+
+  it("a CREATE PROCEDURE body does not false-positive on its inner statements", () => {
+    // routine def stays one unit: the inner DELETE (no WHERE) must NOT warn on non-prod
+    const proc = "CREATE PROCEDURE dbo.purge AS BEGIN DELETE FROM staging; END";
+    expect(checkStatements([proc], rails, false)).toBeNull();
+    // ...but on production it's still a write
+    expect(checkStatements([proc], rails, true)?.title).toContain("PRODUCTION");
+  });
+
+  it("semicolons inside strings/parens do not create phantom statements", () => {
+    const w = checkStatements(["UPDATE t SET note = 'a; b; c' WHERE id = 1"], rails, false);
+    expect(w).toBeNull(); // real top-level WHERE, one statement
+  });
+});
+
+describe("severe flag drives the typed-confirm escalation (Fix 3)", () => {
+  const rails = { warnNoWhere: true, warnDropTruncate: true, warnProductionWrites: true };
+  it("DROP/TRUNCATE is severe", () => {
+    expect(checkStatements(["DROP TABLE x"], rails, false)?.severe).toBe(true);
+    expect(checkStatements(["TRUNCATE TABLE x"], rails, false)?.severe).toBe(true);
+  });
+  it("a production write is severe", () => {
+    expect(checkStatements(["INSERT INTO x VALUES (1)"], rails, true)?.severe).toBe(true);
+  });
+  it("a plain no-WHERE on a non-prod box is NOT severe (one-click)", () => {
+    expect(checkStatements(["UPDATE x SET y = 1"], rails, false)?.severe).toBe(false);
+  });
+});

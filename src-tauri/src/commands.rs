@@ -250,11 +250,22 @@ pub async fn function_definition(window: tauri::Window, state: State<'_, AppStat
 }
 
 #[tauri::command]
-pub async fn export_table(window: tauri::Window, state: State<'_, AppState>, id: String, table: TableInfo, format: String, path: String) -> Result<u64, AppError> {
+pub async fn export_table(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    id: String,
+    table: TableInfo,
+    format: String,
+    path: String,
+    sort: Option<crate::drivers::Sort>,
+    filters: Option<Vec<crate::drivers::Filter>>,
+) -> Result<u64, AppError> {
+    // Export exactly what the grid is showing: the active sort + filters.
+    let filters = filters.unwrap_or_default();
     match &*live(&state, &scoped(&window, &id)).await? {
         LiveConnection::Sql(d) => match format.as_str() {
-            "csv" => crate::impexp::export_csv(d.as_ref(), &table, &path).await,
-            "json" => crate::impexp::export_json(d.as_ref(), &table, &path).await,
+            "csv" => crate::impexp::export_csv(d.as_ref(), &table, &path, sort, filters).await,
+            "json" => crate::impexp::export_json(d.as_ref(), &table, &path, sort, filters).await,
             _ => Err(AppError::query("unsupported export format")),
         },
         LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
@@ -505,7 +516,13 @@ pub async fn table_structure(window: tauri::Window, state: State<'_, AppState>, 
 pub async fn preview_ddl(window: tauri::Window, state: State<'_, AppState>, id: String, op: DdlOp) -> Result<String, AppError> {
     crate::ddl::validate_ddl(&op)?;
     match &*live(&state, &scoped(&window, &id)).await? {
-        LiveConnection::Sql(d) => Ok(render_ddl(&op, d.ddl_flavor())),
+        LiveConnection::Sql(d) => {
+            let flavor = d.ddl_flavor();
+            if let Some(reason) = crate::ddl::unsupported_reason(&op, flavor) {
+                return Err(AppError::query(reason));
+            }
+            Ok(render_ddl(&op, flavor))
+        }
         LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
     }
 }
@@ -514,7 +531,13 @@ pub async fn preview_ddl(window: tauri::Window, state: State<'_, AppState>, id: 
 pub async fn apply_ddl(window: tauri::Window, state: State<'_, AppState>, id: String, op: DdlOp) -> Result<(), AppError> {
     crate::ddl::validate_ddl(&op)?; // reject smuggled SQL in the free-text type field
     match &*live(&state, &scoped(&window, &id)).await? {
-        LiveConnection::Sql(d) => d.execute_raw(&render_ddl(&op, d.ddl_flavor())).await,
+        LiveConnection::Sql(d) => {
+            let flavor = d.ddl_flavor();
+            if let Some(reason) = crate::ddl::unsupported_reason(&op, flavor) {
+                return Err(AppError::query(reason));
+            }
+            d.execute_raw(&render_ddl(&op, flavor)).await
+        }
         LiveConnection::Kv(_) => Err(AppError::query("not a SQL connection")),
     }
 }

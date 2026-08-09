@@ -23,6 +23,7 @@ import { useShortcutsStore } from "../stores/shortcuts";
 import { useWorkspaceStore } from "../stores/workspace";
 import { asJson } from "../lib/jsonCell";
 import ConfirmModal from "./ConfirmModal.vue";
+import DangerConfirmModal from "./DangerConfirmModal.vue";
 import JsonViewer from "./JsonViewer.vue";
 import PromptModal from "./PromptModal.vue";
 import ResizeHandle from "./ResizeHandle.vue";
@@ -131,7 +132,11 @@ function statementColumns(ctx: CompletionContext): CompletionResult | null {
 
 // ---- safety rails: one combined modal per batch ----
 const pendingStmts = ref<string[] | null>(null);
-const railWarning = ref<{ title: string; message: string } | null>(null);
+const railWarning = ref<{ title: string; message: string; severe: boolean } | null>(null);
+// For severe (irreversible / production) batches the confirm requires typing the
+// connection name — same "stop and think" gate the structure UI already uses,
+// so the raw-SQL path is no longer the cheap one-click way around the rails.
+const activeConnName = computed(() => conns.connections.find((c) => c.id === ws.activeId)?.name ?? "");
 
 function guardAndRun(stmts: string[]) {
   const conn = conns.connections.find((c) => c.id === ws.activeId);
@@ -526,7 +531,14 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       confirm-label="Commit" danger
       @confirm="commitCs(true)" @cancel="confirmProd = false" />
 
-    <ConfirmModal v-if="railWarning" :title="railWarning.title" :message="railWarning.message"
+    <!-- Irreversible / production batches: demand the connection name be typed. -->
+    <DangerConfirmModal v-if="railWarning && railWarning.severe"
+      :title="railWarning.title"
+      :message="`${railWarning.message}\n\nThis runs against “${activeConnName}”.`"
+      :expected="activeConnName" confirm-label="Run anyway"
+      @confirm="confirmRail" @cancel="cancelRail" />
+    <!-- Milder warnings (e.g. no-WHERE on a non-prod box): one-click acknowledge. -->
+    <ConfirmModal v-else-if="railWarning" :title="railWarning.title" :message="railWarning.message"
       confirm-label="Run anyway" danger @confirm="confirmRail" @cancel="cancelRail" />
 
     <PromptModal v-if="savePromptOpen" title="Save query" label="Name"

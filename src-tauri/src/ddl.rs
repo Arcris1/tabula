@@ -26,6 +26,10 @@ pub struct ColumnDef {
     pub data_type: String,
     pub nullable: bool,
     pub is_pk: bool,
+    /// Optional DEFAULT expression (free-text, validated by `valid_default`).
+    /// A default is what lets a NOT NULL column be added to a populated table.
+    #[serde(default)]
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,6 +38,10 @@ pub enum DdlOp {
     CreateTable { name: String, columns: Vec<ColumnDef> },
     AddColumn { table: TableInfo, column: ColumnDef },
     DropColumn { table: TableInfo, column: String },
+    /// Change a column's type and/or nullability. (Not supported on SQLite.)
+    AlterColumn { table: TableInfo, column: String, data_type: String, nullable: bool },
+    RenameColumn { table: TableInfo, column: String, new_name: String },
+    RenameTable { table: TableInfo, new_name: String },
     AddIndex { table: TableInfo, name: String, columns: Vec<String>, unique: bool },
     DropIndex { table: TableInfo, name: String },
     DropTable { table: TableInfo },
@@ -42,12 +50,55 @@ pub enum DdlOp {
 
 /// A column type is free-text and interpolated raw into DDL; restrict it to the
 /// shape of a real type (`varchar(255)`, `numeric(10,2)`, `timestamp with time zone`,
-/// `int[]`) so it can't smuggle arbitrary SQL past the preview.
+/// `int[]`, MySQL `enum('a','b')`) while making it impossible to smuggle a second
+/// column/constraint or statement past the preview. Beyond the char allowlist we
+/// require parentheses to be balanced and never go negative, and commas to appear
+/// only inside parens — that closes the `INT DEFAULT 0), hacked TEXT` break-out.
 pub fn valid_data_type(t: &str) -> bool {
     let t = t.trim();
-    !t.is_empty()
-        && t.len() <= 64
-        && t.chars().all(|c| c.is_ascii_alphanumeric() || " (),[]".contains(c))
+    if t.is_empty() || t.len() > 64 { return false; }
+    if t.contains("--") { return false; }
+    let mut depth: i32 = 0;
+    for c in t.chars() {
+        if !(c.is_ascii_alphanumeric() || " (),[]'".contains(c)) { return false; }
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth < 0 { return false; } }
+            ',' if depth == 0 => return false, // a top-level comma = a smuggled column
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// A DEFAULT expression is also interpolated raw. Allow numbers, quoted strings,
+/// and simple keyword/function defaults (`CURRENT_TIMESTAMP`, `now()`, `-1`,
+/// `'active'`) while blocking statement break-out (`;`, `--`) and unbalanced parens.
+pub fn valid_default(d: &str) -> bool {
+    let d = d.trim();
+    if d.is_empty() || d.len() > 128 { return false; }
+    if d.contains(';') || d.contains("--") { return false; }
+    let mut depth: i32 = 0;
+    for c in d.chars() {
+        if !(c.is_ascii_alphanumeric() || " ()'.,:+-_".contains(c)) { return false; }
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth < 0 { return false; } }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// Escapes a value for use inside a T-SQL single-quoted string literal.
+fn esc_lit(s: &str) -> String { s.replace('\'', "''") }
+
+/// The `schema.table` target string sp_rename expects (unquoted names, quote-escaped).
+fn sp_rename_target(table: &TableInfo) -> String {
+    match &table.schema {
+        Some(schema) => format!("{}.{}", esc_lit(schema), esc_lit(&table.name)),
+        None => esc_lit(&table.name),
+    }
 }
 
 fn column_sql(c: &ColumnDef, quote: fn(&str) -> String) -> String {
@@ -55,24 +106,42 @@ fn column_sql(c: &ColumnDef, quote: fn(&str) -> String) -> String {
     if !c.nullable {
         s.push_str(" NOT NULL");
     }
+    if let Some(d) = c.default.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        s.push_str(&format!(" DEFAULT {d}"));
+    }
     s
 }
 
-/// Validates every column type in an op before it is rendered/executed.
+/// Some ops aren't expressible on every engine (e.g. SQLite can't ALTER a column
+/// type in place). Returns a human message when `op` can't run on `flavor`.
+pub fn unsupported_reason(op: &DdlOp, flavor: Flavor) -> Option<String> {
+    match op {
+        DdlOp::AlterColumn { .. } if flavor == Flavor::Sqlite => {
+            Some("SQLite cannot change a column's type or nullability in place — recreate the table instead.".into())
+        }
+        _ => None,
+    }
+}
+
+/// Validates every free-text fragment (column types, defaults) in an op before it
+/// is rendered/executed.
 pub fn validate_ddl(op: &DdlOp) -> Result<(), crate::error::AppError> {
-    let bad = |t: &str| crate::error::AppError::query(format!("invalid column type: {t:?}"));
+    let bad_type = |t: &str| crate::error::AppError::query(format!("invalid column type: {t:?}"));
+    let bad_def = |d: &str| crate::error::AppError::query(format!("invalid default value: {d:?}"));
+    let check_col = |c: &ColumnDef| -> Result<(), crate::error::AppError> {
+        if !valid_data_type(&c.data_type) { return Err(bad_type(&c.data_type)); }
+        if let Some(d) = &c.default {
+            if !valid_default(d) { return Err(bad_def(d)); }
+        }
+        Ok(())
+    };
     match op {
         DdlOp::CreateTable { columns, .. } => {
-            for c in columns {
-                if !valid_data_type(&c.data_type) {
-                    return Err(bad(&c.data_type));
-                }
-            }
+            for c in columns { check_col(c)?; }
         }
-        DdlOp::AddColumn { column, .. } => {
-            if !valid_data_type(&column.data_type) {
-                return Err(bad(&column.data_type));
-            }
+        DdlOp::AddColumn { column, .. } => check_col(column)?,
+        DdlOp::AlterColumn { data_type, .. } => {
+            if !valid_data_type(data_type) { return Err(bad_type(data_type)); }
         }
         _ => {}
     }
@@ -98,6 +167,37 @@ pub fn render_ddl(op: &DdlOp, flavor: Flavor) -> String {
         DdlOp::DropColumn { table, column } => {
             format!("ALTER TABLE {} DROP COLUMN {}", qualified_name(table, quote), quote(column))
         }
+        DdlOp::AlterColumn { table, column, data_type, nullable } => {
+            let tbl = qualified_name(table, quote);
+            let col = quote(column);
+            let null = if *nullable { "" } else { " NOT NULL" };
+            match flavor {
+                // pg separates type and nullability into two ALTER COLUMN clauses
+                Flavor::Postgres => format!(
+                    "ALTER TABLE {tbl} ALTER COLUMN {col} TYPE {data_type}, ALTER COLUMN {col} {} NOT NULL",
+                    if *nullable { "DROP" } else { "SET" },
+                ),
+                Flavor::Mysql => format!("ALTER TABLE {tbl} MODIFY COLUMN {col} {data_type}{null}"),
+                // sqlite is rejected earlier by unsupported_reason
+                _ => format!("ALTER TABLE {tbl} ALTER COLUMN {col} {data_type}{null}"),
+            }
+        }
+        DdlOp::RenameColumn { table, column, new_name } => match flavor {
+            // T-SQL renames via sp_rename with a 'schema.table.column' string
+            Flavor::Mssql => format!(
+                "EXEC sp_rename '{}.{}', '{}', 'COLUMN'",
+                sp_rename_target(table), esc_lit(column), esc_lit(new_name),
+            ),
+            _ => format!(
+                "ALTER TABLE {} RENAME COLUMN {} TO {}",
+                qualified_name(table, quote), quote(column), quote(new_name),
+            ),
+        },
+        DdlOp::RenameTable { table, new_name } => match flavor {
+            // sp_rename's new name must be UNqualified (it stays in the same schema)
+            Flavor::Mssql => format!("EXEC sp_rename '{}', '{}'", sp_rename_target(table), esc_lit(new_name)),
+            _ => format!("ALTER TABLE {} RENAME TO {}", qualified_name(table, quote), quote(new_name)),
+        },
         DdlOp::AddIndex { table, name, columns, unique } => {
             format!(
                 "CREATE {}INDEX {} ON {} ({})",
@@ -131,7 +231,7 @@ mod tests {
 
     fn t() -> TableInfo { TableInfo { schema: None, name: "orders".into(), kind: TableKind::Table } }
     fn col(n: &str, ty: &str, nullable: bool, pk: bool) -> ColumnDef {
-        ColumnDef { name: n.into(), data_type: ty.into(), nullable, is_pk: pk }
+        ColumnDef { name: n.into(), data_type: ty.into(), nullable, is_pk: pk, default: None }
     }
 
     #[test]
@@ -177,5 +277,69 @@ mod tests {
         let schema_table = TableInfo { schema: Some("app".into()), name: "orders".into(), kind: TableKind::Table };
         let drop = DdlOp::DropIndex { table: schema_table, name: "idx_qty".into() };
         assert_eq!(render_ddl(&drop, Flavor::Postgres), r#"DROP INDEX "app"."idx_qty""#);
+    }
+
+    // ---- Fix 4: alter/rename + defaults (persona round-3 findings) ----
+
+    #[test]
+    fn column_default_is_emitted() {
+        let add = DdlOp::AddColumn {
+            table: t(),
+            column: ColumnDef { name: "status".into(), data_type: "INT".into(), nullable: false, is_pk: false, default: Some("0".into()) },
+        };
+        // a default lets a NOT NULL column be added to a populated table (esp. MSSQL)
+        assert_eq!(render_ddl(&add, Flavor::Mssql), "ALTER TABLE [orders] ADD [status] INT NOT NULL DEFAULT 0");
+        assert_eq!(render_ddl(&add, Flavor::Mysql), "ALTER TABLE `orders` ADD COLUMN `status` INT NOT NULL DEFAULT 0");
+    }
+
+    #[test]
+    fn alter_column_type_and_nullability_per_flavor() {
+        let op = DdlOp::AlterColumn { table: t(), column: "qty".into(), data_type: "BIGINT".into(), nullable: false };
+        assert_eq!(render_ddl(&op, Flavor::Mysql), "ALTER TABLE `orders` MODIFY COLUMN `qty` BIGINT NOT NULL");
+        assert_eq!(render_ddl(&op, Flavor::Mssql), "ALTER TABLE [orders] ALTER COLUMN [qty] BIGINT NOT NULL");
+        assert_eq!(render_ddl(&op, Flavor::Postgres),
+            r#"ALTER TABLE "orders" ALTER COLUMN "qty" TYPE BIGINT, ALTER COLUMN "qty" SET NOT NULL"#);
+        let nullable = DdlOp::AlterColumn { table: t(), column: "qty".into(), data_type: "BIGINT".into(), nullable: true };
+        assert_eq!(render_ddl(&nullable, Flavor::Postgres),
+            r#"ALTER TABLE "orders" ALTER COLUMN "qty" TYPE BIGINT, ALTER COLUMN "qty" DROP NOT NULL"#);
+        // SQLite can't do this in place
+        assert!(unsupported_reason(&op, Flavor::Sqlite).is_some());
+        assert!(unsupported_reason(&op, Flavor::Mysql).is_none());
+    }
+
+    #[test]
+    fn rename_column_and_table_per_flavor() {
+        let rc = DdlOp::RenameColumn { table: t(), column: "qty".into(), new_name: "quantity".into() };
+        assert_eq!(render_ddl(&rc, Flavor::Postgres), r#"ALTER TABLE "orders" RENAME COLUMN "qty" TO "quantity""#);
+        assert_eq!(render_ddl(&rc, Flavor::Mssql), "EXEC sp_rename 'orders.qty', 'quantity', 'COLUMN'");
+        let rt = DdlOp::RenameTable { table: t(), new_name: "purchases".into() };
+        assert_eq!(render_ddl(&rt, Flavor::Mysql), "ALTER TABLE `orders` RENAME TO `purchases`");
+        assert_eq!(render_ddl(&rt, Flavor::Mssql), "EXEC sp_rename 'orders', 'purchases'");
+        // MSSQL sp_rename target carries the schema, new name stays bare
+        let schema_table = TableInfo { schema: Some("dbo".into()), name: "orders".into(), kind: TableKind::Table };
+        let rt2 = DdlOp::RenameTable { table: schema_table, new_name: "purchases".into() };
+        assert_eq!(render_ddl(&rt2, Flavor::Mssql), "EXEC sp_rename 'dbo.orders', 'purchases'");
+    }
+
+    #[test]
+    fn data_type_validator_blocks_smuggled_columns_but_allows_enum() {
+        assert!(valid_data_type("varchar(255)"));
+        assert!(valid_data_type("numeric(10,2)"));
+        assert!(valid_data_type("enum('a','b')")); // MySQL enum now allowed
+        assert!(valid_data_type("timestamp with time zone"));
+        assert!(!valid_data_type("INT DEFAULT 0), hacked TEXT")); // break-out closed
+        assert!(!valid_data_type("INT, hacked TEXT"));            // top-level comma
+        assert!(!valid_data_type("INT -- x"));
+    }
+
+    #[test]
+    fn default_validator_blocks_statement_breakout() {
+        assert!(valid_default("0"));
+        assert!(valid_default("'active'"));
+        assert!(valid_default("CURRENT_TIMESTAMP"));
+        assert!(valid_default("now()"));
+        assert!(valid_default("-1"));
+        assert!(!valid_default("0); DROP TABLE users; --"));
+        assert!(!valid_default("0 -- x"));
     }
 }

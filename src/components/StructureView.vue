@@ -6,6 +6,7 @@ import { useConnectionsStore } from "../stores/connections";
 import { useSettingsStore } from "../stores/settings";
 import { useWorkspaceStore } from "../stores/workspace";
 import ConfirmModal from "./ConfirmModal.vue";
+import DangerConfirmModal from "./DangerConfirmModal.vue";
 import SqlPreviewModal from "./SqlPreviewModal.vue";
 
 const emit = defineEmits<{ switchSub: [sub: "data" | "structure"] }>();
@@ -25,7 +26,13 @@ const createSql = computed(() => {
   const st = structure.value;
   const t = ws.selectedTable;
   if (!st || !t) return "";
-  const q = (n: string) => `"${n}"`;
+  // Quote identifiers in the CONNECTION's dialect so the copied CREATE actually
+  // runs there (MySQL backticks, MSSQL brackets, others double-quotes).
+  const e = engine.value;
+  const q = (n: string) =>
+    e === "mysql" ? `\`${n.replace(/`/g, "``")}\`` :
+    e === "mssql" ? `[${n.replace(/]/g, "]]")}]` :
+    `"${n.replace(/"/g, '""')}"`;
   const cols = st.columns.map((c) => {
     let line = `  ${q(c.name)} ${c.dataType}`;
     if (!c.nullable) line += " NOT NULL";
@@ -47,12 +54,22 @@ const addingColumn = ref(false);
 const addingIndex = ref(false);
 
 const newTable = reactive({ name: "", columns: [{ name: "id", dataType: "INTEGER", nullable: false, isPk: true }] as ColumnDef[] });
-const newColumn = reactive<ColumnDef>({ name: "", dataType: "VARCHAR(255)", nullable: true, isPk: false });
+const newColumn = reactive<ColumnDef>({ name: "", dataType: "VARCHAR(255)", nullable: true, isPk: false, default: "" });
 const newIndex = reactive({ name: "", columns: "", unique: false });
+
+// inline column edits (alter type/nullability, rename) + rename table
+const editCol = ref<{ name: string; dataType: string; nullable: boolean } | null>(null);
+const renameCol = ref<{ from: string; to: string } | null>(null);
+const renamingTable = ref(false);
+const renameTbl = ref("");
+// SQLite can't ALTER a column in place — hide the affordance there.
+const engine = computed(() => conns.connections.find((c) => c.id === ws.activeId)?.engine);
+const canAlterColumn = computed(() => engine.value !== "sqlite");
 
 const pendingOp = ref<DdlOp | null>(null);
 const previewSql = ref<string | null>(null);
 const confirmProd = ref(false);
+const dropColConfirm = ref<string | null>(null);
 
 async function refresh() {
   error.value = null;
@@ -79,8 +96,16 @@ async function stage(op: DdlOp) {
   }
 }
 
-async function execute(skipProdCheck = false) {
+async function execute(skipProdCheck = false, skipDropCol = false) {
   if (!ws.activeId || !pendingOp.value) return;
+  const op = pendingOp.value;
+  // DROP COLUMN is irreversible data loss — gate it behind typing the column name,
+  // same as DROP TABLE / TRUNCATE elsewhere (honors the warnDropTruncate rail).
+  if (!skipDropCol && op.op === "dropColumn" && useSettingsStore().rails.warnDropTruncate) {
+    dropColConfirm.value = (op as any).column;
+    return;
+  }
+  dropColConfirm.value = null;
   const conn = conns.connections.find((c) => c.id === ws.activeId);
   if (conn?.isProduction && useSettingsStore().rails.warnProductionWrites && !skipProdCheck) {
     confirmProd.value = true;
@@ -113,11 +138,30 @@ function stageCreateTable() {
 }
 function stageAddColumn() {
   if (!ws.selectedTable) return;
-  stage({ op: "addColumn", table: ws.selectedTable, column: { ...newColumn } });
+  const d = (newColumn.default ?? "").trim();
+  stage({ op: "addColumn", table: ws.selectedTable, column: { ...newColumn, default: d || null } });
 }
 function stageDropColumn(column: string) {
   if (!ws.selectedTable) return;
   stage({ op: "dropColumn", table: ws.selectedTable, column });
+}
+function stageAlterColumn() {
+  if (!ws.selectedTable || !editCol.value) return;
+  const e = editCol.value;
+  stage({ op: "alterColumn", table: ws.selectedTable, column: e.name, dataType: e.dataType, nullable: e.nullable });
+  editCol.value = null;
+}
+function stageRenameColumn() {
+  if (!ws.selectedTable || !renameCol.value || !renameCol.value.to.trim()) return;
+  const r = renameCol.value;
+  stage({ op: "renameColumn", table: ws.selectedTable, column: r.from, newName: r.to.trim() });
+  renameCol.value = null;
+}
+function stageRenameTable() {
+  if (!ws.selectedTable || !renameTbl.value.trim()) return;
+  stage({ op: "renameTable", table: ws.selectedTable, newName: renameTbl.value.trim() });
+  renamingTable.value = false;
+  renameTbl.value = "";
 }
 function stageAddIndex() {
   if (!ws.selectedTable) return;
@@ -175,6 +219,16 @@ onBeforeUnmount(unregisterRefresh);
       <div class="flex items-center gap-3 text-xs">
         <span class="text-zinc-500">Name</span>
         <span class="px-2 py-1 rounded bg-zinc-900 border border-zinc-800 font-mono">{{ ws.selectedTable?.name }}</span>
+        <template v-if="!renamingTable">
+          <button class="text-zinc-600 hover:text-blue-400"
+            @click="renamingTable = true; renameTbl = ws.selectedTable?.name ?? ''">rename</button>
+        </template>
+        <template v-else>
+          <input v-model="renameTbl" class="w-40 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 font-mono" @keydown.enter="stageRenameTable" />
+          <button @click="stageRenameTable" :disabled="!renameTbl.trim() || renameTbl.trim() === ws.selectedTable?.name"
+            class="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Preview DDL</button>
+          <button @click="renamingTable = false" class="text-zinc-500 hover:text-zinc-300">cancel</button>
+        </template>
         <span class="text-zinc-500">Primary</span>
         <span class="px-2 py-1 rounded bg-blue-950/50 border border-blue-900 font-mono">{{ pkColumns.join(", ") || "—" }}</span>
         <input v-model="colSearch" placeholder="Search for column…"
@@ -199,6 +253,7 @@ onBeforeUnmount(unregisterRefresh);
         <div v-if="addingColumn" class="flex gap-2 items-center mb-2">
           <input v-model="newColumn.name" placeholder="name" class="w-40 bg-zinc-900 border border-zinc-800 rounded px-2 py-1" />
           <input v-model="newColumn.dataType" placeholder="type" class="w-40 bg-zinc-900 border border-zinc-800 rounded px-2 py-1" />
+          <input v-model="newColumn.default" placeholder="default (optional)" class="w-40 bg-zinc-900 border border-zinc-800 rounded px-2 py-1" />
           <label class="text-xs text-zinc-500 flex items-center gap-1"><input type="checkbox" v-model="newColumn.nullable" /> null</label>
           <button @click="stageAddColumn" :disabled="!newColumn.name"
             class="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs disabled:opacity-40">Preview DDL</button>
@@ -217,7 +272,8 @@ onBeforeUnmount(unregisterRefresh);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="c in shownColumns" :key="c.name" class="border-t border-zinc-900">
+            <template v-for="c in shownColumns" :key="c.name">
+            <tr class="border-t border-zinc-900">
               <td class="pr-6 py-1">
                 {{ c.name }}
                 <span v-if="c.isPk" class="ml-1 text-[10px] uppercase text-amber-400 border border-amber-900 rounded px-1">pk</span>
@@ -228,10 +284,40 @@ onBeforeUnmount(unregisterRefresh);
               <td class="pr-6 py-1 text-zinc-500">{{ c.default ?? "" }}</td>
               <td class="pr-6 py-1 text-emerald-400/80">{{ c.foreignKey ?? "" }}</td>
               <td class="pr-6 py-1 text-zinc-500 max-w-64 truncate" :title="c.comment ?? ''">{{ c.comment ?? "" }}</td>
-              <td class="py-1">
+              <td class="py-1 whitespace-nowrap">
+                <button v-if="canAlterColumn" class="text-zinc-700 hover:text-blue-400 text-xs mr-2"
+                  @click="renameCol = null; editCol = { name: c.name, dataType: c.dataType, nullable: c.nullable }">alter</button>
+                <button class="text-zinc-700 hover:text-blue-400 text-xs mr-2"
+                  @click="editCol = null; renameCol = { from: c.name, to: c.name }">rename</button>
                 <button class="text-zinc-700 hover:text-red-400 text-xs" @click="stageDropColumn(c.name)">drop</button>
               </td>
             </tr>
+            <!-- inline alter editor -->
+            <tr v-if="editCol && editCol.name === c.name" class="bg-zinc-900/40">
+              <td colspan="8" class="py-2 pl-2">
+                <div class="flex gap-2 items-center">
+                  <span class="text-xs text-zinc-500">alter {{ c.name }}:</span>
+                  <input v-model="editCol.dataType" placeholder="type" class="w-44 bg-zinc-900 border border-zinc-800 rounded px-2 py-1" />
+                  <label class="text-xs text-zinc-500 flex items-center gap-1"><input type="checkbox" v-model="editCol.nullable" /> null</label>
+                  <button @click="stageAlterColumn" :disabled="!editCol.dataType.trim()"
+                    class="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs disabled:opacity-40">Preview DDL</button>
+                  <button @click="editCol = null" class="text-xs text-zinc-500 hover:text-zinc-300">cancel</button>
+                </div>
+              </td>
+            </tr>
+            <!-- inline rename editor -->
+            <tr v-if="renameCol && renameCol.from === c.name" class="bg-zinc-900/40">
+              <td colspan="8" class="py-2 pl-2">
+                <div class="flex gap-2 items-center">
+                  <span class="text-xs text-zinc-500">rename {{ c.name }} to:</span>
+                  <input v-model="renameCol.to" class="w-44 bg-zinc-900 border border-zinc-800 rounded px-2 py-1" @keydown.enter="stageRenameColumn" />
+                  <button @click="stageRenameColumn" :disabled="!renameCol.to.trim() || renameCol.to.trim() === c.name"
+                    class="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs disabled:opacity-40">Preview DDL</button>
+                  <button @click="renameCol = null" class="text-xs text-zinc-500 hover:text-zinc-300">cancel</button>
+                </div>
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
         <div v-if="structure.comment" class="mt-1 text-[11px] text-zinc-500">table comment: {{ structure.comment }}</div>
@@ -288,5 +374,10 @@ onBeforeUnmount(unregisterRefresh);
     <ConfirmModal v-if="confirmProd" title="DDL on PRODUCTION"
       :message="previewSql ?? ''" confirm-label="Execute" danger
       @confirm="execute(true)" @cancel="confirmProd = false" />
+    <DangerConfirmModal v-if="dropColConfirm"
+      :title="`Drop column ${dropColConfirm}`"
+      :message="`This permanently removes the column “${dropColConfirm}” and all of its data. This cannot be undone.`"
+      :expected="dropColConfirm" confirm-label="Drop column"
+      @confirm="execute(false, true)" @cancel="dropColConfirm = null; previewSql = null; pendingOp = null" />
   </div>
 </template>

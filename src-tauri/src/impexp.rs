@@ -1,5 +1,5 @@
 use crate::changeset::{Changeset, RowUpdate};
-use crate::drivers::{FetchOptions, SqlDriver, TableInfo};
+use crate::drivers::{Filter, FetchOptions, SqlDriver, Sort, TableInfo};
 use crate::error::AppError;
 use serde::Serialize;
 
@@ -14,14 +14,23 @@ fn cell_str(v: &serde_json::Value) -> String {
     }
 }
 
-/// Fetches every row of a table in pages (browse SELECT).
-async fn all_rows(d: &dyn SqlDriver, table: &TableInfo) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>), AppError> {
+/// Fetches every row matching the given sort+filters, paged (browse SELECT).
+/// `sort`/`filters` come from the grid so an export reflects exactly what the
+/// user is looking at — not the whole unfiltered table.
+async fn all_rows(
+    d: &dyn SqlDriver,
+    table: &TableInfo,
+    sort: Option<Sort>,
+    filters: Vec<Filter>,
+) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>), AppError> {
     const PAGE: i64 = 1000;
     let mut offset = 0;
     let mut cols: Vec<String> = vec![];
     let mut rows: Vec<Vec<serde_json::Value>> = vec![];
     loop {
-        let p = d.fetch_rows(table, &FetchOptions { limit: PAGE, offset, sort: None, filters: vec![] }).await?;
+        let p = d
+            .fetch_rows(table, &FetchOptions { limit: PAGE, offset, sort: sort.clone(), filters: filters.clone() })
+            .await?;
         if offset == 0 {
             cols = p.columns.iter().map(|c| c.name.clone()).collect();
         }
@@ -33,8 +42,14 @@ async fn all_rows(d: &dyn SqlDriver, table: &TableInfo) -> Result<(Vec<String>, 
     Ok((cols, rows))
 }
 
-pub async fn export_csv(d: &dyn SqlDriver, table: &TableInfo, path: &str) -> Result<u64, AppError> {
-    let (cols, rows) = all_rows(d, table).await?;
+pub async fn export_csv(
+    d: &dyn SqlDriver,
+    table: &TableInfo,
+    path: &str,
+    sort: Option<Sort>,
+    filters: Vec<Filter>,
+) -> Result<u64, AppError> {
+    let (cols, rows) = all_rows(d, table, sort, filters).await?;
     let mut w = csv::Writer::from_path(path).map_err(|e| AppError::internal(e.to_string()))?;
     w.write_record(&cols).map_err(|e| AppError::internal(e.to_string()))?;
     for r in &rows {
@@ -45,8 +60,14 @@ pub async fn export_csv(d: &dyn SqlDriver, table: &TableInfo, path: &str) -> Res
     Ok(rows.len() as u64)
 }
 
-pub async fn export_json(d: &dyn SqlDriver, table: &TableInfo, path: &str) -> Result<u64, AppError> {
-    let (cols, rows) = all_rows(d, table).await?;
+pub async fn export_json(
+    d: &dyn SqlDriver,
+    table: &TableInfo,
+    path: &str,
+    sort: Option<Sort>,
+    filters: Vec<Filter>,
+) -> Result<u64, AppError> {
+    let (cols, rows) = all_rows(d, table, sort, filters).await?;
     let objs: Vec<serde_json::Map<String, serde_json::Value>> = rows.iter().map(|r| {
         cols.iter().cloned().zip(r.iter().cloned()).collect()
     }).collect();

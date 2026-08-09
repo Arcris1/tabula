@@ -9,10 +9,20 @@ const props = defineProps<{
   rows: unknown[][];
   selected: unknown[] | null;
   table?: string;
+  /** When provided, "Export" streams the FULL server-side result (current
+   *  filters+sort) to `path` instead of serializing the in-memory rows. Returns
+   *  the number of rows written. Used by the data grid where `rows` is only the
+   *  current page. */
+  serverExport?: (format: "csv" | "json", path: string) => Promise<number>;
+  /** Honest label for the in-memory copy actions: "page" when `rows` is a
+   *  single page, "all" when it's the complete result (e.g. a query result). */
+  rowsScope?: "page" | "all";
 }>();
 
 const open = ref(false);
 const note = ref<string | null>(null);
+const busy = ref(false);
+const scopeWord = () => (props.rowsScope === "page" ? "page" : "all rows");
 
 function copy(text: string, what: string) {
   navigator.clipboard?.writeText(text);
@@ -25,10 +35,23 @@ async function exportFile(format: "csv" | "json") {
   const name = (props.table ?? "result") + "." + format;
   const path = await saveDialog({ defaultPath: name, filters: [{ name: format.toUpperCase(), extensions: [format] }] });
   if (!path) return;
-  const text = format === "csv" ? rowsToCsv(props.columns, props.rows) : rowsToJson(props.columns, props.rows);
-  await api.writeTextFile(path, text);
-  note.value = `Exported ${props.rows.length} rows`;
-  setTimeout(() => (note.value = null), 1500);
+  try {
+    if (props.serverExport) {
+      busy.value = true;
+      note.value = "Exporting…";
+      const n = await props.serverExport(format, path);
+      note.value = `Exported ${n.toLocaleString()} rows`;
+    } else {
+      const text = format === "csv" ? rowsToCsv(props.columns, props.rows) : rowsToJson(props.columns, props.rows);
+      await api.writeTextFile(path, text);
+      note.value = `Exported ${props.rows.length.toLocaleString()} rows`;
+    }
+  } catch (e: any) {
+    note.value = `Export failed: ${e?.message ?? e}`;
+  } finally {
+    busy.value = false;
+    setTimeout(() => (note.value = null), 2500);
+  }
 }
 const tbl = () => props.table ?? "table";
 </script>
@@ -44,11 +67,15 @@ const tbl = () => props.table ?? "table";
         <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="copy(rowsToInsert(tbl(), columns, [selected]), 'row as INSERT')">Copy row as INSERT</button>
         <div class="my-1 border-t border-zinc-800"></div>
       </template>
-      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="copy(rowsToTsv(columns, rows), 'all rows (TSV)')">Copy all (TSV)</button>
-      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="copy(rowsToInsert(tbl(), columns, rows), 'all rows as INSERT')">Copy all as INSERT</button>
+      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="copy(rowsToTsv(columns, rows), `${scopeWord()} (TSV)`)">Copy {{ scopeWord() }} (TSV)</button>
+      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="copy(rowsToInsert(tbl(), columns, rows), `${scopeWord()} as INSERT`)">Copy {{ scopeWord() }} as INSERT</button>
       <div class="my-1 border-t border-zinc-800"></div>
-      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="exportFile('csv')">Export CSV…</button>
-      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" @click="exportFile('json')">Export JSON…</button>
+      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" :disabled="busy" @click="exportFile('csv')">
+        Export CSV{{ serverExport ? " (full result)" : "" }}…
+      </button>
+      <button class="w-full text-left px-3 py-1 hover:bg-zinc-800" :disabled="busy" @click="exportFile('json')">
+        Export JSON{{ serverExport ? " (full result)" : "" }}…
+      </button>
     </div>
   </div>
 </template>
