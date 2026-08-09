@@ -248,6 +248,8 @@ pub trait KvDriver: Send + Sync {
     async fn delete_key(&self, key: &str) -> Result<(), AppError>;
     /// ttl_secs <= 0 => PERSIST
     async fn set_ttl(&self, key: &str, ttl_secs: i64) -> Result<(), AppError>;
+    /// Switch the active logical database (SELECT n) on this connection.
+    async fn select_db(&self, index: i64) -> Result<(), AppError>;
 }
 
 pub fn qualified_name(table: &TableInfo, quote: fn(&str) -> String) -> String {

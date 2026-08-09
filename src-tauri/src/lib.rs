@@ -104,6 +104,7 @@ pub fn run() {
             commands::set_redis_value,
             commands::delete_redis_key,
             commands::set_redis_ttl,
+            commands::redis_select_db,
             commands::table_structure,
             commands::preview_ddl,
             commands::apply_ddl,

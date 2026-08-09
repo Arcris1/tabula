@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { nextTick, ref, watch } from "vue";
 
 const KEY = "dbclient.savedQueries";
 
@@ -20,13 +20,33 @@ export const useSavedQueriesStore = defineStore("savedQueries", () => {
     /* corrupted -> empty */
   }
 
+  // guards the write-back watcher from firing when we're applying another
+  // window's change (which would ping-pong identical writes between windows)
+  let applyingRemote = false;
   watch(queries, (v) => {
+    if (applyingRemote) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(v));
     } catch {
       /* storage unavailable */
     }
   }, { deep: true });
+
+  // Live-sync across windows: localStorage 'storage' events fire in OTHER windows
+  // of the same origin when one writes, so saving/renaming in one window updates
+  // the list everywhere.
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (e) => {
+      if (e.key !== KEY) return;
+      applyingRemote = true;
+      try {
+        queries.value = e.newValue ? JSON.parse(e.newValue) : [];
+      } catch {
+        /* ignore corrupt payload */
+      }
+      nextTick(() => { applyingRemote = false; });
+    });
+  }
 
   function save(name: string, sql: string) {
     // upsert: overwrite an existing saved query with the same name instead of

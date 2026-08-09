@@ -160,4 +160,38 @@ impl KvDriver for RedisDriver {
         }
         Ok(())
     }
+
+    async fn select_db(&self, index: i64) -> Result<(), AppError> {
+        // All clones share one underlying multiplexed connection, so SELECT sticks
+        // for subsequent commands until switched again.
+        let mut c = self.conn.clone();
+        let _: () = redis::cmd("SELECT").arg(index).query_async(&mut c).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod select_db_test {
+    use super::*;
+    use crate::drivers::KvDriver;
+
+    // cargo test --lib redis_kv::select_db_test -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn select_db_persists_across_ops() {
+        let d = RedisDriver::connect("127.0.0.1", 63791, None, 0).await.expect("connect");
+        // write a probe into db 5, then confirm a later op on the same driver sees it
+        d.select_db(5).await.expect("select 5");
+        d.set_value("tabula_seltest", &RedisValueDto::String { value: "hi".into() }).await.expect("set");
+        let got = d.get_value("tabula_seltest").await.expect("get");
+        assert!(matches!(got.value, RedisValueDto::String { ref value } if value == "hi"));
+        // switching away then back keeps db state coherent
+        d.select_db(0).await.expect("select 0");
+        let missing = d.get_value("tabula_seltest").await.expect("get db0");
+        assert_eq!(missing.ttl_secs, -2, "key must NOT exist in db 0");
+        // cleanup
+        d.select_db(5).await.unwrap();
+        d.delete_key("tabula_seltest").await.unwrap();
+        println!("SELECT stickiness OK");
+    }
 }

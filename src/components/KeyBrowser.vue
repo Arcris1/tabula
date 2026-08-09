@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { api, type KeyTreeNode } from "../lib/api";
+import { useConnectionsStore } from "../stores/connections";
 import { useWorkspaceStore } from "../stores/workspace";
 import KeyTreeItem from "./KeyTreeItem";
 
 const emit = defineEmits<{ select: [key: string] }>();
 const ws = useWorkspaceStore();
+const conns = useConnectionsStore();
 const pattern = ref("*");
+// active logical DB (0-15). Seeded from the connection's configured db index.
+const db = ref(0);
+async function changeDb() {
+  if (!ws.activeId) return;
+  await api.redisSelectDb(ws.activeId, db.value);
+  scan(true);
+}
 const tree = ref<KeyTreeNode[]>([]);
 const keyCount = ref(0);
 const loading = ref(false);
@@ -38,12 +47,20 @@ function toggle(path: string) {
   else expanded.value.add(path);
   expanded.value = new Set(expanded.value);
 }
-onMounted(() => scan(true));
+onMounted(() => {
+  const n = parseInt(conns.connections.find((c) => c.id === ws.activeId)?.database ?? "0", 10);
+  db.value = Number.isFinite(n) ? n : 0;
+  scan(true);
+});
 </script>
 
 <template>
   <aside class="w-72 shrink-0 border-r border-zinc-800 flex flex-col">
     <div class="p-2 flex gap-1">
+      <select v-model.number="db" @change="changeDb" title="Redis database index"
+        class="bg-zinc-900 border border-zinc-800 rounded px-1 py-1 text-xs text-zinc-400 outline-none">
+        <option v-for="n in 16" :key="n - 1" :value="n - 1">db{{ n - 1 }}</option>
+      </select>
       <input v-model="pattern" @keydown.enter="scan(true)" placeholder="Pattern (e.g. cache:*)"
         class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs outline-none focus:border-zinc-600" />
       <button @click="scan(true)" class="text-xs px-2 rounded border border-zinc-700 hover:bg-zinc-800">Scan</button>

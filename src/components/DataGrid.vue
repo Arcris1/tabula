@@ -47,6 +47,48 @@ const confirmProd = ref(false);
 const conflictError = ref<string | null>(null);
 
 const selectedRow = ref<number | null>(null);
+// selected cell for keyboard nav + copy: row index + column position within
+// visibleCols (so hidden columns are skipped and ⌘C reads the right value).
+const selectedCell = ref<{ row: number; vcol: number } | null>(null);
+function selectCell(row: number, vcol: number) {
+  selectedRow.value = row;
+  selectedCell.value = { row, vcol };
+  scroller.value?.focus();
+}
+function copySelectedCell() {
+  const sc = selectedCell.value;
+  if (!sc) return;
+  const raw = rows.value[sc.row]?.[visibleCols.value[sc.vcol]?.i];
+  navigator.clipboard?.writeText(raw == null ? "" : String(raw));
+}
+function ensureRowVisible(row: number) {
+  const el = scroller.value;
+  if (!el) return;
+  const top = row * ROW_H, bottom = top + ROW_H;
+  if (top < el.scrollTop) el.scrollTop = top;
+  else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+}
+function onGridKeydown(e: KeyboardEvent) {
+  const sc = selectedCell.value;
+  if (!sc || editing.value) return;
+  // don't hijack a real text selection / copy
+  if ((e.key === "c" || e.key === "C") && (e.metaKey || e.ctrlKey)) {
+    if (window.getSelection()?.toString()) return;
+    e.preventDefault();
+    copySelectedCell();
+    return;
+  }
+  const lastRow = rows.value.length - 1;
+  const lastCol = visibleCols.value.length - 1;
+  let handled = true;
+  if (e.key === "ArrowDown") selectCell(Math.min(sc.row + 1, lastRow), sc.vcol);
+  else if (e.key === "ArrowUp") selectCell(Math.max(sc.row - 1, 0), sc.vcol);
+  else if (e.key === "ArrowRight") selectCell(sc.row, Math.min(sc.vcol + 1, lastCol));
+  else if (e.key === "ArrowLeft") selectCell(sc.row, Math.max(sc.vcol - 1, 0));
+  else if (e.key === "Enter") beginEdit(sc.row, visibleCols.value[sc.vcol].c.name);
+  else handled = false;
+  if (handled) { e.preventDefault(); ensureRowVisible(selectedCell.value!.row); }
+}
 const jsonView = ref<{ value: unknown; title: string } | null>(null);
 function openJson(value: unknown, title: string) {
   const parsed = asJson(value);
@@ -295,7 +337,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       read-only: table has no primary key
     </div>
 
-    <div ref="scroller" class="flex-1 overflow-auto font-mono text-[12px]" @scroll="onScroll">
+    <div ref="scroller" tabindex="0" class="flex-1 overflow-auto font-mono text-[12px] outline-none" @scroll="onScroll" @keydown="onGridKeydown">
       <table class="border-collapse min-w-full">
         <thead class="sticky top-0 bg-zinc-950 z-10">
           <tr>
@@ -352,11 +394,13 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
                 :class="cs.isDeleted(r, columnNames) ? 'text-red-400' : ''"
                 @click="cs.markDelete(r, columnNames)">×</button>
             </td>
-            <td v-for="x in visibleCols" :key="x.i"
+            <td v-for="(x, vc) in visibleCols" :key="x.i"
               class="px-2 border-b border-zinc-900 whitespace-nowrap max-w-96 overflow-hidden text-ellipsis"
+              :class="selectedCell && selectedCell.row === range.start + i && selectedCell.vcol === vc ? 'ring-1 ring-inset ring-blue-500 bg-blue-500/10' : ''"
+              @click="selectCell(range.start + i, vc)"
               @dblclick="beginEdit(range.start + i, x.c.name)">
               <input v-if="editing && editing.rowIndex === range.start + i && editing.column === x.c.name"
-                ref="editInput" v-model="editValue"
+                ref="editInput" v-model="editValue" @click.stop @mousedown.stop
                 @keydown.enter="commitEdit" @keydown.esc="editing = null" @blur="commitEdit"
                 class="w-full bg-zinc-900 border border-amber-700 rounded px-1 py-0.5 text-[11px] outline-none" />
               <template v-else>

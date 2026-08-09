@@ -348,8 +348,26 @@ async function probeHealth() {
     } catch {
       const n = (pingFails.get(c.id) ?? 0) + 1;
       pingFails.set(c.id, n);
-      if (n >= 2) ws.markDead(c.id);
+      if (n >= 2) {
+        ws.markDead(c.id);
+        // Deep-heal: try to rebuild the connection automatically — first on the
+        // 2nd failure, then ~every 60s while it stays dead (a modest backoff, not
+        // a storm) so a link that recovers heals without the user clicking.
+        if ((n - 2) % 5 === 0) autoHeal(c.id);
+      }
     }
+  }
+}
+async function autoHeal(id: string) {
+  if (reconnecting.value) return; // a manual reconnect is in flight
+  // Never silently rebuild a connection with an open transaction — that would
+  // ROLLBACK it. Leave it dead; the user reconnects (with the confirm) manually.
+  if (queries.tabs.some((t) => t.connectionId === id && t.txOpen)) return;
+  try {
+    await ws.reconnect(id); // sets health live on success, dead on failure
+    pingFails.delete(id);
+  } catch {
+    /* stays dead — next backoff tick may retry, or the user can Reconnect */
   }
 }
 

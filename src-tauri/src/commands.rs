@@ -569,6 +569,14 @@ pub async fn set_redis_ttl(window: tauri::Window, state: State<'_, AppState>, id
 }
 
 #[tauri::command]
+pub async fn redis_select_db(window: tauri::Window, state: State<'_, AppState>, id: String, db: i64) -> Result<(), AppError> {
+    match &*live(&state, &scoped(&window, &id)).await? {
+        LiveConnection::Kv(d) => d.select_db(db).await,
+        LiveConnection::Sql(_) => Err(AppError::query("not a Redis connection")),
+    }
+}
+
+#[tauri::command]
 pub async fn table_structure(window: tauri::Window, state: State<'_, AppState>, id: String, table: TableInfo) -> Result<TableStructure, AppError> {
     match &*live(&state, &scoped(&window, &id)).await? {
         LiveConnection::Sql(d) => d.table_structure(&table).await,
