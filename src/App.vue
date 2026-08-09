@@ -317,15 +317,40 @@ async function onOnline() {
 }
 function onOffline() { wasOffline = true; }
 
+// ---- active health probe ----
+// The OS 'online'/'offline' events only fire on total network loss; a VPN drop,
+// a DB restart or a captive portal leave navigator.onLine true. Poll each open
+// connection so a dead link is marked in the tab bar instead of looking alive
+// until the next query fails. Two strikes before "dead" to ride out blips.
+const pingFails = new Map<string, number>();
+let healthTimer: number | undefined;
+async function probeHealth() {
+  if (!ws.isOpen) return;
+  for (const c of ws.conns) {
+    if (c.health === "reconnecting") continue; // don't fight a manual reconnect
+    try {
+      await api.pingConnection(c.id);
+      pingFails.delete(c.id);
+      ws.markLive(c.id);
+    } catch {
+      const n = (pingFails.get(c.id) ?? 0) + 1;
+      pingFails.set(c.id, n);
+      if (n >= 2) ws.markDead(c.id);
+    }
+  }
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
+  healthTimer = window.setInterval(probeHealth, 12000);
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("online", onOnline);
   window.removeEventListener("offline", onOffline);
+  if (healthTimer !== undefined) window.clearInterval(healthTimer);
 });
 </script>
 

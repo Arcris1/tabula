@@ -198,9 +198,39 @@ pub async fn connect(window: tauri::Window, state: State<'_, AppState>, id: Stri
     Ok(paradigm.to_string())
 }
 
+/// Server-side kill of an in-flight query (never a task-abort, which would drop
+/// the session mid-transaction). Must run while the connection is still live.
+async fn kill_running(state: &AppState, rq: &crate::queries::RunningQuery) {
+    if let Some(sid) = &rq.session_id {
+        if let Some(conn) = state.registry.get(&rq.connection_id).await {
+            if let LiveConnection::Sql(d) = &*conn {
+                let _ = d.kill_session(sid).await;
+            }
+        }
+    }
+}
+
+/// Lightweight liveness check for an already-open connection, used by the
+/// frontend health poll so a dropped link (VPN/DB restart) is detected even when
+/// the OS still reports online. Errors if the connection is gone or unreachable.
+#[tauri::command]
+pub async fn ping_connection(window: tauri::Window, state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    match &*live(&state, &scoped(&window, &id)).await? {
+        LiveConnection::Sql(d) => d.ping().await,
+        LiveConnection::Kv(d) => d.ping().await,
+    }
+}
+
 #[tauri::command]
 pub async fn disconnect(window: tauri::Window, state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     let key = scoped(&window, &id);
+    // Cancel any in-flight queries on this connection FIRST — while the pool is
+    // still live so the server-side kill lands — and tombstone their checked-out
+    // sessions so the executors discard them instead of re-inserting orphans.
+    for rq in state.queries.drain_by_connection(&key).await {
+        state.sessions.tombstone(&rq.session_key).await;
+        kill_running(&state, &rq).await;
+    }
     for s in state.sessions.drain_by_prefix(&format!("{key}:")).await {
         discard_session(s); // sessions hold pooled connections: release first
     }
@@ -355,7 +385,14 @@ pub async fn close_session(
     id: String,
     tab_id: String,
 ) -> Result<(), AppError> {
-    if let Some(s) = state.sessions.remove(&session_key(&window, &id, &tab_id)).await {
+    let skey = session_key(&window, &id, &tab_id);
+    // If a query is streaming on this tab, kill it and tombstone the session so
+    // its executor discards it rather than re-inserting it after the tab is gone.
+    for rq in state.queries.drain_by_session_key(&skey).await {
+        state.sessions.tombstone(&rq.session_key).await;
+        kill_running(&state, &rq).await;
+    }
+    if let Some(s) = state.sessions.remove(&skey).await {
         discard_session(s);
     }
     Ok(())
@@ -465,6 +502,10 @@ pub async fn run_query(
         let state = exec_win.app_handle().state::<crate::AppState>();
         if connection_dead {
             drop(session); // next run_query on this tab reconnects
+        } else if state.sessions.take_tombstone(&exec_skey).await {
+            // the connection/tab was torn down while this query ran — ROLLBACK and
+            // drop instead of re-inserting an orphan session that nothing owns.
+            discard_session(session);
         } else {
             state.sessions.put(&exec_skey, session).await;
         }
@@ -474,6 +515,7 @@ pub async fn run_query(
     state.queries.insert(&query_id, RunningQuery {
         session_id,
         connection_id: key, // window-scoped registry key
+        session_key: skey,  // window:id:tab
     }).await;
     Ok(query_id)
 }
@@ -576,18 +618,11 @@ pub async fn add_history(state: State<'_, AppState>, entry: HistoryEntry) -> Res
 
 #[tauri::command]
 pub async fn cancel_query(state: State<'_, AppState>, query_id: String) -> Result<(), AppError> {
+    // server-side kill only: the stream errors out naturally, the executor returns
+    // the session, and the frontend always settles. Aborting the task here would
+    // drop the session mid-transaction and return a dirty connection to the pool.
     if let Some(rq) = state.queries.remove(&query_id).await {
-        if let Some(sid) = rq.session_id {
-            if let Some(conn) = state.registry.get(&rq.connection_id).await {
-                if let LiveConnection::Sql(d) = &*conn {
-                    // server-side kill only: the stream errors out naturally, the
-                    // executor returns the session, and the frontend always settles.
-                    // Aborting the task here would drop the session mid-transaction
-                    // and return a dirty connection to the pool.
-                    let _ = d.kill_session(&sid).await;
-                }
-            }
-        }
+        kill_running(&state, &rq).await;
     }
     Ok(())
 }

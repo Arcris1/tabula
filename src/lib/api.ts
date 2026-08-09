@@ -158,6 +158,7 @@ export const api = {
     invoke<void>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
   connect: (id: string, database?: string) => invoke<"sql" | "kv">("connect", { id, database: database ?? null }),
   reconnect: (id: string) => invoke<"sql" | "kv">("reconnect", { id }),
+  pingConnection: (id: string) => invoke<void>("ping_connection", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   listTables: (id: string) => invoke<TableInfo[]>("list_tables", { id }),
   listFunctions: (id: string) => invoke<string[]>("list_functions", { id }),

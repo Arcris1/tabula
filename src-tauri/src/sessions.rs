@@ -1,5 +1,5 @@
 use crate::drivers::QuerySession;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
 /// Persistent per-query-tab connections, keyed "{window}:{connection}:{tab}".
@@ -8,6 +8,10 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub struct SessionRegistry {
     inner: Mutex<HashMap<String, Box<dyn QuerySession>>>,
+    /// Session keys whose connection was torn down while a query held the session
+    /// checked out. The executor consults this before PUTting the session back so
+    /// it discards it instead of re-inserting an orphan.
+    tombstones: Mutex<HashSet<String>>,
 }
 
 impl SessionRegistry {
@@ -16,6 +20,14 @@ impl SessionRegistry {
     }
     pub async fn put(&self, key: &str, session: Box<dyn QuerySession>) {
         self.inner.lock().await.insert(key.to_string(), session);
+    }
+    /// Mark a checked-out session for discard-on-return (disconnect/close).
+    pub async fn tombstone(&self, key: &str) {
+        self.tombstones.lock().await.insert(key.to_string());
+    }
+    /// Consume a tombstone: returns true if `key` was marked, clearing it.
+    pub async fn take_tombstone(&self, key: &str) -> bool {
+        self.tombstones.lock().await.remove(key)
     }
     pub async fn remove(&self, key: &str) -> Option<Box<dyn QuerySession>> {
         self.inner.lock().await.remove(key)
@@ -59,5 +71,14 @@ mod tests {
         // connection delete sweeps across windows
         let drained = reg.drain_by_infix(":conn1:").await;
         assert_eq!(drained.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn tombstone_is_one_shot() {
+        let reg = SessionRegistry::default();
+        assert!(!reg.take_tombstone("winA:conn1:tab1").await); // none set
+        reg.tombstone("winA:conn1:tab1").await;
+        assert!(reg.take_tombstone("winA:conn1:tab1").await); // consumed
+        assert!(!reg.take_tombstone("winA:conn1:tab1").await); // gone after consume
     }
 }

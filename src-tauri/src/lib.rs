@@ -79,6 +79,7 @@ pub fn run() {
             commands::save_connection,
             commands::delete_connection,
             commands::test_connection,
+            commands::ping_connection,
             commands::connect,
             commands::reconnect,
             commands::disconnect,

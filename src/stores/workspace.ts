@@ -161,6 +161,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const c = get(id);
     if (c) c.health = "dead";
   }
+  /** Mark a connection live again (health probe saw it recover). Never overrides
+   *  an in-progress manual reconnect. */
+  function markLive(id: string) {
+    const c = get(id);
+    if (c && c.health !== "reconnecting") c.health = "live";
+  }
 
   /** Disconnect and remove ONE connection; switch active to a neighbour. */
   async function closeConnection(id: string) {
@@ -195,6 +201,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     conns, activeId, isOpen,
     paradigm, tables, functions, selectedTable, openTables, pendingFilter, mainTab,
     tableKey, get, addConnection, setActive, openFresh, loadTables, loadFunctions,
-    selectTable, navigateToRow, closeTable, reconnect, reconnectAll, markDead, closeConnection, close,
+    selectTable, navigateToRow, closeTable, reconnect, reconnectAll, markDead, markLive, closeConnection, close,
   };
 });
