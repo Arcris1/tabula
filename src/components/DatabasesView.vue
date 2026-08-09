@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { api, type ConnectionConfig, type DbInfo } from "../lib/api";
 import { useConnectionsStore } from "../stores/connections";
-import ConfirmModal from "./ConfirmModal.vue";
+import DangerConfirmModal from "./DangerConfirmModal.vue";
 
 const conns = useConnectionsStore();
 const emit = defineEmits<{ open: [connectionId: string, database: string] }>();
@@ -139,9 +139,11 @@ const colorClass: Record<string, string> = {
       </template>
     </div>
 
-    <ConfirmModal v-if="dropTarget" title="Drop database"
-      :message="`Permanently DROP database “${dropTarget}” on ${selected?.name}? This deletes all its data and cannot be undone.`"
-      confirm-label="Drop database" danger
+    <DangerConfirmModal v-if="dropTarget"
+      :title="`Drop database ${dropTarget}`"
+      :message="`Permanently DROP database “${dropTarget}” on ${selected?.name}${selected?.isProduction ? ' — a PRODUCTION connection' : ''}. This deletes ALL of its data and cannot be undone.`"
+      :expected="dropTarget"
+      confirm-label="Drop database"
       @confirm="confirmDrop" @cancel="dropTarget = null" />
   </div>
 </template>

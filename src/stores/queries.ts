@@ -10,6 +10,8 @@ export interface QueryRun {
   queryId: string;
   columns: ColumnMeta[];
   rows: unknown[][];
+  /** true once the in-memory row buffer hit ROW_CAP and further rows were dropped from the grid */
+  truncated?: boolean;
   /** server info messages (T-SQL PRINT etc.) — SSMS's "Messages" */
   messages: string[];
   status: "running" | "done" | "error";
@@ -129,6 +131,23 @@ export const useQueriesStore = defineStore("queries", () => {
     if (current) await api.cancelQuery(current.queryId);
   }
 
+  /** Max rows the editor grid holds in memory. The server still streams the full
+   *  result (rowCount/affected reflect the true total); we just stop growing the
+   *  in-memory array so a `SELECT *` on a huge table can't wedge the UI. */
+  const ROW_CAP = 10_000;
+
+  function appendRows(run: QueryRun, incoming: unknown[][]) {
+    if (run.truncated) return; // already at the cap — drop silently, banner is shown
+    const room = ROW_CAP - run.rows.length;
+    if (incoming.length <= room) {
+      // push in place (avoids reallocating the whole array on every batch)
+      for (const r of incoming) run.rows.push(r as unknown[]);
+    } else {
+      for (let i = 0; i < room; i++) run.rows.push(incoming[i] as unknown[]);
+      run.truncated = true;
+    }
+  }
+
   function findRun(queryId: string): QueryRun | null {
     for (const t of tabs.value) {
       const r = t.runs.find((r) => r.queryId === queryId);
@@ -162,7 +181,7 @@ export const useQueriesStore = defineStore("queries", () => {
     const run = findRun(payload.queryId);
     if (!run) return;
     if (name === "query:columns") run.columns = payload.columns;
-    else if (name === "query:rows") run.rows = run.rows.concat(payload.rows);
+    else if (name === "query:rows") appendRows(run, payload.rows);
     else if (name === "query:message") run.messages.push(payload.message);
     else if (name === "query:done") {
       run.status = "done";

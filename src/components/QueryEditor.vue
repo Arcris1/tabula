@@ -258,7 +258,14 @@ function inspectorEdit(column: string, textVal: string) {
   const original = row[colNames.value.indexOf(column)];
   cs.editCell(row, colNames.value, column, parseCellInput(textVal, original));
 }
-const canEdit = computed(() => !!editTable.value);
+function inspectorSetNull(column: string) {
+  const row = inspectorRow.value;
+  if (!row) return;
+  cs.editCell(row, colNames.value, column, null);
+}
+// No inline editing on a truncated result: the buffer is an incomplete slice, so
+// row identity / "affects 1 row" guarantees the changeset relies on can't hold.
+const canEdit = computed(() => !!editTable.value && !run.value?.truncated);
 
 watch([() => props.tab.activeRunIndex, () => run.value?.status, () => run.value?.queryId], async () => {
   cs.setContext([]);
@@ -404,6 +411,12 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
     <div class="flex-1 overflow-auto font-mono text-[12px]" @scroll="onScroll">
       <pre v-if="run && run.columns.length && run.messages.length"
         class="px-3 py-2 font-mono text-[11.5px] text-zinc-400 whitespace-pre-wrap border-b border-zinc-800">{{ run.messages.join("\n") }}</pre>
+      <div v-if="run && run.truncated"
+        class="px-3 py-1.5 text-[11.5px] text-amber-300 bg-amber-950/40 border-b border-amber-900/60 sticky top-0 z-20">
+        Showing the first {{ run.rows.length.toLocaleString() }} rows. The result is larger —
+        editing is disabled here; add a <span class="font-mono">LIMIT</span>/<span class="font-mono">WHERE</span>
+        or use Export to get the full set.
+      </div>
       <table v-if="run && run.columns.length" class="border-collapse min-w-full">
         <thead class="sticky top-0 bg-zinc-950 z-10">
           <tr>
@@ -478,7 +491,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       v-model="panels.inspectorW" />
     <RowInspector v-if="run && run.columns.length"
       :columns="run.columns" :cell="inspectorCell" :editable="canEdit"
-      :empty="inspectorRow === null" :width="panels.inspectorW" @edit="inspectorEdit" />
+      :empty="inspectorRow === null" :width="panels.inspectorW" @edit="inspectorEdit" @set-null="inspectorSetNull" />
     </div>
 
     <div v-if="commitError" class="mx-2 mb-1 px-3 py-2 text-xs text-amber-400 border border-amber-900 rounded">

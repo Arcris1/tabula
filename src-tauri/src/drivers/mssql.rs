@@ -147,12 +147,15 @@ fn build_select(table: &TableInfo, opts: &FetchOptions, pk: &[String]) -> (Strin
         let col = quote(&f.column);
         match f.op {
             FilterOp::Contains => {
-                binds.push(format!("%{}%", f.value));
-                clauses.push(format!("CAST({col} AS NVARCHAR(MAX)) LIKE @P{}", binds.len()));
+                // escape LIKE wildcards — T-SQL also treats `[` as a class opener
+                let esc = super::escape_like(&f.value).replace('[', "![");
+                binds.push(format!("%{esc}%"));
+                clauses.push(format!("CAST({col} AS NVARCHAR(MAX)) LIKE @P{} ESCAPE '!'", binds.len()));
             }
             FilterOp::Equals => {
-                binds.push(f.value.clone());
-                clauses.push(format!("CAST({col} AS NVARCHAR(MAX)) = @P{}", binds.len()));
+                // inline escaped literal so the server coerces it to the column
+                // type — CAST(col AS NVARCHAR(MAX)) = @P forced a full scan
+                clauses.push(format!("{} = '{}'", col, crate::changeset::escape_std(&f.value)));
             }
             FilterOp::IsNull => clauses.push(format!("{col} IS NULL")),
             FilterOp::NotNull => clauses.push(format!("{col} IS NOT NULL")),
@@ -161,15 +164,20 @@ fn build_select(table: &TableInfo, opts: &FetchOptions, pk: &[String]) -> (Strin
     if !clauses.is_empty() {
         sql.push_str(&format!(" WHERE {}", clauses.join(" AND ")));
     }
-    let order = if let Some(sort) = &opts.sort {
-        format!("{} {}", quote(&sort.column), if sort.desc { "DESC" } else { "ASC" })
-    } else if let Some(first_pk) = pk.first() {
-        quote(first_pk)
+    // user sort + PK tiebreaker (stable paging on non-unique sort columns)
+    let mut order: Vec<String> = vec![];
+    if let Some(sort) = &opts.sort {
+        order.push(format!("{} {}", quote(&sort.column), if sort.desc { "DESC" } else { "ASC" }));
+        order.extend(pk.iter().filter(|k| **k != sort.column).map(|k| quote(k)));
     } else {
-        "(SELECT NULL)".to_string()
-    };
+        order.extend(pk.iter().map(|k| quote(k)));
+    }
+    if order.is_empty() {
+        order.push("(SELECT NULL)".to_string()); // OFFSET/FETCH requires ORDER BY
+    }
     sql.push_str(&format!(
-        " ORDER BY {order} OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+        " ORDER BY {} OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+        order.join(", "),
         opts.offset, opts.limit
     ));
     (sql, binds)
@@ -560,16 +568,102 @@ impl QuerySession for MssqlSession {
     }
 }
 
+/// Position just past leading whitespace and `--` / `/* */` comments.
+fn skip_ws_comments(b: &[u8], mut i: usize) -> usize {
+    loop {
+        while i < b.len() && (b[i] as char).is_ascii_whitespace() { i += 1; }
+        if i + 1 < b.len() && b[i] == b'-' && b[i + 1] == b'-' {
+            while i < b.len() && b[i] != b'\n' { i += 1; }
+        } else if i + 1 < b.len() && b[i] == b'/' && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') { i += 1; }
+            i = (i + 2).min(b.len());
+        } else {
+            return i;
+        }
+    }
+}
+
+fn read_word(b: &[u8], i: usize) -> (String, usize) {
+    let mut j = i;
+    while j < b.len() && ((b[j] as char).is_ascii_alphanumeric() || b[j] == b'_' || b[j] == b'@' || b[j] == b'#') {
+        j += 1;
+    }
+    (String::from_utf8_lossy(&b[i..j]).to_ascii_lowercase(), j)
+}
+
+/// Skip a balanced `( … )` group, ignoring parens inside 'strings'.
+fn skip_parens(b: &[u8], mut i: usize) -> usize {
+    debug_assert!(b.get(i) == Some(&b'('));
+    let mut depth = 0i32;
+    while i < b.len() {
+        match b[i] {
+            b'\'' => {
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\'' {
+                        if b.get(i + 1) == Some(&b'\'') { i += 2; continue; }
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 { return i + 1; }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    i
+}
+
+/// Whether a batch should run through execute() to get accurate affected-row
+/// counts: plain DML, or CTE-led DML (`WITH … UPDATE/DELETE/INSERT/MERGE`).
+/// Skips leading comments so `-- JIRA-123` annotations don't defeat detection.
+fn is_dml_batch(sql: &str) -> bool {
+    let b = sql.as_bytes();
+    let i = skip_ws_comments(b, 0);
+    let (kw, mut i) = read_word(b, i);
+    match kw.as_str() {
+        "insert" | "update" | "delete" | "merge" => true,
+        "with" => {
+            // walk the CTE list: name [(cols)] AS ( … ) [, …] then peek the verb
+            loop {
+                i = skip_ws_comments(b, i);
+                let (_name, j) = read_word(b, i);
+                if j == i { return false; } // malformed — be conservative
+                i = skip_ws_comments(b, j);
+                if b.get(i) == Some(&b'(') {
+                    i = skip_parens(b, i); // optional column list
+                    i = skip_ws_comments(b, i);
+                }
+                let (as_kw, j) = read_word(b, i);
+                if as_kw != "as" { return false; }
+                i = skip_ws_comments(b, j);
+                if b.get(i) != Some(&b'(') { return false; }
+                i = skip_parens(b, i); // the CTE body
+                i = skip_ws_comments(b, i);
+                if b.get(i) == Some(&b',') { i += 1; continue; }
+                let (verb, _) = read_word(b, i);
+                return matches!(verb.as_str(), "insert" | "update" | "delete" | "merge");
+            }
+        }
+        _ => false,
+    }
+}
+
 impl MssqlSession {
     async fn stream_impl(&mut self, sql: &str, tx: &tokio::sync::mpsc::Sender<QueryEvent>) -> Result<(), AppError> {
-        let first = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_lowercase();
         // DML goes through execute() for accurate affected-row counts.
         // EVERYTHING else must be a raw SQL batch (simple_query): execute()'s
         // sp_executesql-style wrapping rejects CREATE PROCEDURE (error 156)
         // and silently discards USE database-context changes between batches.
         // simple_query gives true SSMS batch semantics AND still streams rows,
         // so DECLARE…SELECT, IF…SELECT etc. work too.
-        if matches!(first.as_str(), "insert" | "update" | "delete" | "merge") {
+        if is_dml_batch(sql) {
             let res = self.client.execute(sql, &[]).await?;
             let affected: u64 = res.rows_affected().iter().sum();
             let _ = tx.send(QueryEvent::Done { row_count: 0, affected_rows: affected }).await;
@@ -866,5 +960,33 @@ mod print_msg_test {
         println!("messages: {msgs:?}");
         assert!(msgs.iter().any(|m| m.contains("Iteration 1")), "missing Iteration 1: {msgs:?}");
         assert!(msgs.iter().any(|m| m.contains("Iteration 3")), "missing Iteration 3: {msgs:?}");
+    }
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::is_dml_batch;
+
+    #[test]
+    fn plain_dml_and_selects() {
+        assert!(is_dml_batch("UPDATE t SET x = 1"));
+        assert!(is_dml_batch("  insert into t values (1)"));
+        assert!(!is_dml_batch("SELECT * FROM t"));
+        assert!(!is_dml_batch("CREATE PROCEDURE p AS BEGIN SELECT 1; END"));
+        assert!(!is_dml_batch("EXEC dbo.p"));
+    }
+
+    #[test]
+    fn comment_prefixed_dml_is_detected() {
+        assert!(is_dml_batch("-- JIRA-123 fix\nUPDATE t SET x = 1"));
+        assert!(is_dml_batch("/* audit\n note */ DELETE FROM t WHERE id = 1"));
+        assert!(!is_dml_batch("-- note\nSELECT 1"));
+    }
+
+    #[test]
+    fn cte_led_batches_route_by_final_verb() {
+        assert!(is_dml_batch("WITH c AS (SELECT id FROM t WHERE s = ')') UPDATE c SET id = 1"));
+        assert!(is_dml_batch("with a (x) as (select 1), b as (select 2) delete from t"));
+        assert!(!is_dml_batch("WITH c AS (SELECT 1 AS x) SELECT * FROM c"));
     }
 }

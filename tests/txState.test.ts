@@ -40,3 +40,19 @@ describe("txEffect", () => {
     expect(txEffect("START something_else")).toBeNull();
   });
 });
+
+describe("T-SQL BEGIN blocks vs transactions", () => {
+  it("BEGIN...END blocks do not open a transaction", () => {
+    expect(txEffect("BEGIN PRINT 'hi'; END")).toBeNull();
+    expect(txEffect("BEGIN TRY SELECT 1 END TRY BEGIN CATCH END CATCH")).toBeNull();
+    expect(txEffect("BEGIN\n  SELECT 1;\nEND")).toBeNull();
+  });
+  it("real transaction openers still count", () => {
+    expect(txEffect("BEGIN")).toBe("begin");
+    expect(txEffect("begin;")).toBe("begin");
+    expect(txEffect("BEGIN TRAN")).toBe("begin");
+    expect(txEffect("BEGIN TRANSACTION my_tx")).toBe("begin");
+    expect(txEffect("BEGIN WORK")).toBe("begin");
+    expect(txEffect("BEGIN ISOLATION LEVEL SERIALIZABLE")).toBe("begin");
+  });
+});

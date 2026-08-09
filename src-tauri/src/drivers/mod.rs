@@ -257,12 +257,20 @@ pub fn qualified_name(table: &TableInfo, quote: fn(&str) -> String) -> String {
     }
 }
 
+/// Escape LIKE wildcards in a user-typed Contains value; paired with
+/// `ESCAPE '!'` in the SQL so `%`/`_` in the value match literally.
+pub(crate) fn escape_like(v: &str) -> String {
+    v.replace('!', "!!").replace('%', "!%").replace('_', "!_")
+}
+
 pub fn build_select(
     table: &TableInfo,
     opts: &FetchOptions,
+    pk: &[String],
     quote: fn(&str) -> String,
     cast_text: fn(&str) -> String,
     placeholder: fn(usize) -> String,
+    escape: fn(&str) -> String,
 ) -> (String, Vec<String>) {
     let qualified = qualified_name(table, quote);
     let mut sql = format!("SELECT * FROM {qualified}");
@@ -272,12 +280,16 @@ pub fn build_select(
         let col = quote(&f.column);
         match f.op {
             FilterOp::Contains => {
-                binds.push(format!("%{}%", f.value));
-                clauses.push(format!("{} LIKE {}", cast_text(&col), placeholder(binds.len())));
+                binds.push(format!("%{}%", escape_like(&f.value)));
+                clauses.push(format!("{} LIKE {} ESCAPE '!'", cast_text(&col), placeholder(binds.len())));
             }
             FilterOp::Equals => {
-                binds.push(f.value.clone());
-                clauses.push(format!("{} = {}", cast_text(&col), placeholder(binds.len())));
+                // Inline the value as an escaped literal (the same escaping the
+                // changeset write path uses) instead of CAST-ing the COLUMN to
+                // text: the engine coerces the literal to the column's type, so
+                // an indexed `id = '123'` stays an index lookup instead of a
+                // full-table scan.
+                clauses.push(format!("{} = '{}'", col, escape(&f.value)));
             }
             FilterOp::IsNull => clauses.push(format!("{col} IS NULL")),
             FilterOp::NotNull => clauses.push(format!("{col} IS NOT NULL")),
@@ -286,12 +298,18 @@ pub fn build_select(
     if !clauses.is_empty() {
         sql.push_str(&format!(" WHERE {}", clauses.join(" AND ")));
     }
+    // Deterministic paging: LIMIT/OFFSET without a total order can skip or
+    // duplicate rows between pages. Order by the user's sort with the PK as
+    // tiebreaker, or by the PK alone; tables without a PK keep old behavior.
+    let mut order: Vec<String> = vec![];
     if let Some(sort) = &opts.sort {
-        sql.push_str(&format!(
-            " ORDER BY {} {}",
-            quote(&sort.column),
-            if sort.desc { "DESC" } else { "ASC" }
-        ));
+        order.push(format!("{} {}", quote(&sort.column), if sort.desc { "DESC" } else { "ASC" }));
+        order.extend(pk.iter().filter(|k| **k != sort.column).map(|k| quote(k)));
+    } else {
+        order.extend(pk.iter().map(|k| quote(k)));
+    }
+    if !order.is_empty() {
+        sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
     sql.push_str(&format!(" LIMIT {} OFFSET {}", opts.limit, opts.offset));
     (sql, binds)
@@ -309,17 +327,46 @@ mod tests {
     fn t() -> TableInfo {
         TableInfo { schema: Some("public".into()), name: "users".into(), kind: TableKind::Table }
     }
+    fn esc(s: &str) -> String { s.replace('\'', "''") }
+    const PK: &[String] = &[];
 
     #[test]
-    fn plain_select_with_paging() {
+    fn plain_select_orders_by_pk() {
         let opts = FetchOptions { limit: 500, offset: 1000, sort: None, filters: vec![] };
-        let (sql, binds) = build_select(&t(), &opts, q, c, dollar);
-        assert_eq!(sql, r#"SELECT * FROM "public"."users" LIMIT 500 OFFSET 1000"#);
+        let pk = vec!["id".to_string()];
+        let (sql, binds) = build_select(&t(), &opts, &pk, q, c, dollar, esc);
+        assert_eq!(sql, r#"SELECT * FROM "public"."users" ORDER BY "id" LIMIT 500 OFFSET 1000"#);
         assert!(binds.is_empty());
     }
 
     #[test]
+    fn no_pk_keeps_unordered_paging() {
+        let opts = FetchOptions { limit: 500, offset: 0, sort: None, filters: vec![] };
+        let (sql, _) = build_select(&t(), &opts, PK, q, c, dollar, esc);
+        assert_eq!(sql, r#"SELECT * FROM "public"."users" LIMIT 500 OFFSET 0"#);
+    }
+
+    #[test]
+    fn sort_gets_pk_tiebreaker_but_not_when_sorting_by_pk() {
+        let pk = vec!["id".to_string()];
+        let by_status = FetchOptions {
+            limit: 10, offset: 0,
+            sort: Some(Sort { column: "status".into(), desc: false }), filters: vec![],
+        };
+        let (sql, _) = build_select(&t(), &by_status, &pk, q, c, dollar, esc);
+        assert!(sql.contains(r#"ORDER BY "status" ASC, "id" LIMIT"#), "{sql}");
+
+        let by_id = FetchOptions {
+            limit: 10, offset: 0,
+            sort: Some(Sort { column: "id".into(), desc: true }), filters: vec![],
+        };
+        let (sql, _) = build_select(&t(), &by_id, &pk, q, c, dollar, esc);
+        assert!(sql.contains(r#"ORDER BY "id" DESC LIMIT"#), "{sql}");
+    }
+
+    #[test]
     fn filters_sort_and_placeholders() {
+        let pk = vec!["id".to_string()];
         let opts = FetchOptions {
             limit: 500, offset: 0,
             sort: Some(Sort { column: "id".into(), desc: true }),
@@ -329,22 +376,35 @@ mod tests {
                 Filter { column: "deleted_at".into(), op: FilterOp::IsNull, value: String::new() },
             ],
         };
-        let (sql, binds) = build_select(&t(), &opts, q, c, dollar);
+        let (sql, binds) = build_select(&t(), &opts, &pk, q, c, dollar, esc);
         assert_eq!(
             sql,
-            r#"SELECT * FROM "public"."users" WHERE CAST("email" AS TEXT) LIKE $1 AND CAST("name" AS TEXT) = $2 AND "deleted_at" IS NULL ORDER BY "id" DESC LIMIT 500 OFFSET 0"#
+            r#"SELECT * FROM "public"."users" WHERE CAST("email" AS TEXT) LIKE $1 ESCAPE '!' AND "name" = 'bob' AND "deleted_at" IS NULL ORDER BY "id" DESC LIMIT 500 OFFSET 0"#
         );
-        assert_eq!(binds, vec!["%gmail%".to_string(), "bob".to_string()]);
+        // equals is an inline literal now — only the LIKE pattern binds
+        assert_eq!(binds, vec!["%gmail%".to_string()]);
     }
 
     #[test]
-    fn qmark_placeholders_and_no_schema() {
-        let table = TableInfo { schema: None, name: "t".into(), kind: TableKind::Table };
+    fn equals_is_native_and_escaped() {
         let opts = FetchOptions {
             limit: 10, offset: 0, sort: None,
-            filters: vec![Filter { column: "a".into(), op: FilterOp::Equals, value: "1".into() }],
+            filters: vec![Filter { column: "a".into(), op: FilterOp::Equals, value: "x' OR '1'='1".into() }],
         };
-        let (sql, _) = build_select(&table, &opts, q, c, qmark);
-        assert_eq!(sql, r#"SELECT * FROM "t" WHERE CAST("a" AS TEXT) = ? LIMIT 10 OFFSET 0"#);
+        let (sql, binds) = build_select(&t(), &opts, PK, q, c, qmark, esc);
+        // no CAST on the column (sargable) and quotes doubled (no injection)
+        assert!(sql.contains(r#""a" = 'x'' OR ''1''=''1'"#), "{sql}");
+        assert!(binds.is_empty());
+    }
+
+    #[test]
+    fn contains_escapes_like_wildcards() {
+        let opts = FetchOptions {
+            limit: 10, offset: 0, sort: None,
+            filters: vec![Filter { column: "phone".into(), op: FilterOp::Contains, value: "50%_!".into() }],
+        };
+        let (sql, binds) = build_select(&t(), &opts, PK, q, c, qmark, esc);
+        assert!(sql.contains(r#"LIKE ? ESCAPE '!'"#), "{sql}");
+        assert_eq!(binds, vec!["%50!%!_!!%".to_string()]);
     }
 }

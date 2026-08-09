@@ -14,7 +14,7 @@ const props = defineProps<{
   empty: boolean;
   width?: number;
 }>();
-const emit = defineEmits<{ edit: [column: string, text: string] }>();
+const emit = defineEmits<{ edit: [column: string, text: string]; setNull: [column: string] }>();
 
 function text(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -38,9 +38,14 @@ const fields = computed(() =>
     <div v-if="empty" class="flex-1 flex items-center justify-center text-zinc-600 text-xs">No row selected</div>
     <div v-else class="flex-1 overflow-y-auto px-3 py-2">
       <div v-for="f in fields" :key="f.name" class="mb-2">
-        <div class="flex items-baseline justify-between">
-          <label class="text-[11px] text-zinc-400">{{ f.name }}</label>
-          <span class="text-[10px] text-zinc-600">{{ f.type }}</span>
+        <div class="flex items-baseline justify-between gap-1">
+          <label class="text-[11px] text-zinc-400 truncate">{{ f.name }}</label>
+          <span class="flex items-center gap-1 shrink-0">
+            <button v-if="editable && !f.isNull" @click="emit('setNull', f.name)"
+              class="text-[10px] px-1 rounded border border-zinc-800 text-zinc-500 hover:text-amber-300 hover:border-amber-800"
+              title="Set this field to NULL">∅</button>
+            <span class="text-[10px] text-zinc-600">{{ f.type }}</span>
+          </span>
         </div>
         <input
           :value="f.isNull ? 'NULL' : text(f.value)"

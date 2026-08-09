@@ -189,7 +189,8 @@ impl SqlDriver for SqliteDriver {
         Ok(super::TableStructure { columns, indexes, triggers, comment: None })
     }
     async fn fetch_rows(&self, table: &TableInfo, opts: &FetchOptions) -> Result<RowsPage, AppError> {
-        let (sql, binds) = build_select(table, opts, quote, cast_text, qmark);
+        let pk = self.primary_key(table).await.unwrap_or_default();
+        let (sql, binds) = build_select(table, opts, &pk, quote, cast_text, qmark, crate::changeset::escape_std);
         let mut q = sqlx::query(&sql);
         for b in &binds { q = q.bind(b); }
         let rows = q.fetch_all(&self.pool).await?;

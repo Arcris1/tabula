@@ -75,6 +75,11 @@ function inspectorEdit(column: string, textVal: string) {
   const original = row[columnNames.value.indexOf(column)];
   cs.editCell(row, columnNames.value, column, parseCellInput(textVal, original));
 }
+function inspectorSetNull(column: string) {
+  const row = inspectorRow.value;
+  if (!row) return;
+  cs.editCell(row, columnNames.value, column, null);
+}
 
 // "start-end of ~total" range display
 const rangeLabel = computed(() => {
@@ -428,7 +433,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
    <ResizeHandle v-if="page" axis="x" invert :min="200" :max="560" v-model="panels.inspectorW" />
    <RowInspector v-if="page"
      :columns="page.columns" :cell="inspectorCell" :editable="cs.editable"
-     :empty="inspectorRow === null" :width="panels.inspectorW" @edit="inspectorEdit" />
+     :empty="inspectorRow === null" :width="panels.inspectorW" @edit="inspectorEdit" @set-null="inspectorSetNull" />
 
    <JsonViewer v-if="jsonView" :value="jsonView.value" :title="jsonView.title" @close="jsonView = null" />
   </div>

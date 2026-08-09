@@ -77,3 +77,28 @@ describe("checkStatements", () => {
     expect(w.message).toContain("-- oops");
   });
 });
+
+describe("hardened guards (persona-panel findings)", () => {
+  const rails = { warnNoWhere: true, warnDropTruncate: true, warnProductionWrites: true };
+
+  it("'where' inside a string literal no longer silences the warning", () => {
+    const w = checkStatements(["UPDATE leads SET note = 'call where applicable'"], rails, false);
+    expect(w?.title).toContain("No WHERE");
+  });
+
+  it("a WHERE only inside a subquery no longer silences the warning", () => {
+    const w = checkStatements(["UPDATE t SET x = (SELECT max(y) FROM u WHERE z = 1)"], rails, false);
+    expect(w?.title).toContain("No WHERE");
+  });
+
+  it("a real top-level WHERE passes", () => {
+    const w = checkStatements(["UPDATE t SET x = 1 WHERE id = 5"], rails, false);
+    expect(w).toBeNull();
+  });
+
+  it("EXEC on a production connection is flagged as a write", () => {
+    const w = checkStatements(["EXEC dbo.purge_all"], rails, true);
+    expect(w?.title).toContain("PRODUCTION");
+    expect(checkStatements(["EXEC dbo.purge_all"], rails, false)).toBeNull();
+  });
+});

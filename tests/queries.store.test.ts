@@ -165,6 +165,37 @@ describe("queries store (multi-run)", () => {
     await batch;
   });
 
+  it("caps the in-memory row buffer at 10k and flags truncation", async () => {
+    const q = useQueriesStore();
+    const tab = q.addTab("conn-1");
+    const batch = q.run(tab, ["SELECT * FROM huge"]);
+    await tick();
+    const qid = tab.runs[0].queryId;
+    // stream 15k rows in 1k batches
+    const batchRows = Array.from({ length: 1000 }, (_, i) => [i]);
+    for (let b = 0; b < 15; b++) q.handleEvent("query:rows", { queryId: qid, rows: batchRows });
+    q.handleEvent("query:done", { queryId: qid, rowCount: 15000, affectedRows: 0, elapsedMs: 9 });
+    await batch;
+    expect(tab.runs[0].rows).toHaveLength(10000);
+    expect(tab.runs[0].truncated).toBe(true);
+    // the true total is still reported from the server's rowCount
+    expect(tab.runs[0].rowCount).toBe(15000);
+  });
+
+  it("does not flag truncation for a result at exactly the cap", async () => {
+    const q = useQueriesStore();
+    const tab = q.addTab("conn-1");
+    const batch = q.run(tab, ["SELECT * FROM justright"]);
+    await tick();
+    const qid = tab.runs[0].queryId;
+    const batchRows = Array.from({ length: 1000 }, (_, i) => [i]);
+    for (let b = 0; b < 10; b++) q.handleEvent("query:rows", { queryId: qid, rows: batchRows });
+    q.handleEvent("query:done", { queryId: qid, rowCount: 10000, affectedRows: 0, elapsedMs: 5 });
+    await batch;
+    expect(tab.runs[0].rows).toHaveLength(10000);
+    expect(tab.runs[0].truncated).toBeFalsy();
+  });
+
   it("ignores events for unknown query ids", async () => {
     const q = useQueriesStore();
     const tab = q.addTab("conn-1");

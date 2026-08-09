@@ -13,7 +13,45 @@ export type SqlDialect = "mysql" | "other";
 
 const NO_WHERE_RE = /^\s*(update|delete)\b/i;
 const DROP_TRUNC_RE = /^\s*(drop|truncate|rename)\b/i;
-const WRITE_RE = /^\s*(insert|update|delete|alter|drop|create|truncate|replace|grant|rename|call|load|merge)\b/i;
+const WRITE_RE = /^\s*(insert|update|delete|alter|drop|create|truncate|replace|grant|rename|call|exec|execute|load|merge)\b/i;
+
+/** Blanks the CONTENTS of '…' / "…" / `…` literals (quotes kept) so words
+ *  inside strings — `SET note='call where applicable'` — can't fool guards. */
+export function blankStrings(sql: string): string {
+  let out = "";
+  let mode: "code" | "sq" | "dq" | "bq" = "code";
+  for (const ch of sql) {
+    if (mode === "code") {
+      if (ch === "'") mode = "sq";
+      else if (ch === '"') mode = "dq";
+      else if (ch === "`") mode = "bq";
+      out += ch;
+    } else if ((mode === "sq" && ch === "'") || (mode === "dq" && ch === '"') || (mode === "bq" && ch === "`")) {
+      mode = "code";
+      out += ch;
+    } else {
+      out += " ";
+    }
+  }
+  return out;
+}
+
+/** WHERE at paren depth 0 — a WHERE inside a subquery doesn't scope the outer
+ *  UPDATE/DELETE, so it must not silence the no-WHERE warning. */
+function hasTopLevelWhere(v: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < v.length; i++) {
+    const ch = v[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (ch === "w" || ch === "W")) {
+      const prev = v[i - 1];
+      if (prev && /[\w$]/.test(prev)) continue; // inside another word
+      if (/^where\b/i.test(v.slice(i, i + 6))) return true;
+    }
+  }
+  return false;
+}
 
 export interface CommentOptions {
   /** MySQL also treats # as a line comment (postgres uses # as an operator). */
@@ -72,9 +110,11 @@ export function stripLeadingCte(sql: string): string {
   }
 }
 
-/** Normalized view of a statement for guard classification. */
+/** Normalized view of a statement for guard classification: comments removed,
+ *  string contents blanked (so paren/keyword tricks inside literals are inert),
+ *  leading CTE unwrapped. */
 function guardView(sql: string, dialect: SqlDialect): string {
-  return stripLeadingCte(stripComments(sql, { hashComments: dialect === "mysql" }));
+  return stripLeadingCte(blankStrings(stripComments(sql, { hashComments: dialect === "mysql" })));
 }
 
 /** Returns ONE combined warning for the whole batch, or null when nothing is flagged. */
@@ -89,7 +129,7 @@ export function checkStatements(
   const views = stmts.map((s) => [s, guardView(s, dialect)] as const);
 
   if (settings.warnNoWhere) {
-    const offenders = views.filter(([, v]) => NO_WHERE_RE.test(v) && !/\bwhere\b/i.test(v)).map(([s]) => s);
+    const offenders = views.filter(([, v]) => NO_WHERE_RE.test(v) && !hasTopLevelWhere(v)).map(([s]) => s);
     if (offenders.length) sections.push({ title: "No WHERE clause — affects EVERY row", offenders });
   }
   if (settings.warnDropTruncate) {

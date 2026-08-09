@@ -10,6 +10,7 @@ import { useSettingsStore } from "../stores/settings";
 import { useShortcutsStore } from "../stores/shortcuts";
 import { useWorkspaceStore } from "../stores/workspace";
 import ConfirmModal from "./ConfirmModal.vue";
+import DangerConfirmModal from "./DangerConfirmModal.vue";
 import FunctionViewer from "./FunctionViewer.vue";
 import SqlPreviewModal from "./SqlPreviewModal.vue";
 
@@ -31,6 +32,7 @@ const menu = ref<{ x: number; y: number; table: TableInfo } | null>(null);
 const previewSql = ref<string | null>(null);
 const pendingOp = ref<DdlOp | null>(null);
 const confirmProd = ref(false);
+const dangerConfirm = ref<{ verb: string; table: string } | null>(null);
 const opError = ref<string | null>(null);
 
 function openMenu(e: MouseEvent, table: TableInfo) {
@@ -100,12 +102,25 @@ async function stageOp(op: DdlOp) {
     opError.value = e?.message ?? String(e);
   }
 }
-async function executeOp(skipProd = false) {
+async function executeOp(skipProd = false, skipDanger = false) {
   if (!ws.activeId || !pendingOp.value) return;
+  const op = pendingOp.value;
+  // Type-the-name gate for irreversible table ops (honors the warnDropTruncate rail).
+  if (
+    !skipDanger &&
+    settings.rails.warnDropTruncate &&
+    (op.op === "dropTable" || op.op === "truncateTable")
+  ) {
+    dangerConfirm.value = {
+      verb: op.op === "dropTable" ? "DROP" : "TRUNCATE",
+      table: (op as any).table.name,
+    };
+    return;
+  }
+  dangerConfirm.value = null;
   const prod = conns.connections.find((c) => c.id === ws.activeId)?.isProduction;
   if (prod && settings.rails.warnProductionWrites && !skipProd) { confirmProd.value = true; return; }
   confirmProd.value = false;
-  const op = pendingOp.value;
   try {
     await api.applyDdl(ws.activeId, op);
     previewSql.value = null;
@@ -299,5 +314,13 @@ async function toggleExpand(t: TableInfo) {
     <ConfirmModal v-if="confirmProd" title="DDL on PRODUCTION"
       :message="previewSql ?? ''" confirm-label="Execute" danger
       @confirm="executeOp(true)" @cancel="confirmProd = false" />
+    <DangerConfirmModal v-if="dangerConfirm"
+      :title="`${dangerConfirm.verb} ${dangerConfirm.table}`"
+      :message="dangerConfirm.verb === 'DROP'
+        ? `This permanently removes the table “${dangerConfirm.table}” and all of its data. This cannot be undone.`
+        : `This permanently deletes every row in “${dangerConfirm.table}”. This cannot be undone.`"
+      :expected="dangerConfirm.table"
+      :confirm-label="dangerConfirm.verb === 'DROP' ? 'Drop table' : 'Truncate table'"
+      @confirm="executeOp(false, true)" @cancel="dangerConfirm = null; previewSql = null; pendingOp = null" />
   </aside>
 </template>
