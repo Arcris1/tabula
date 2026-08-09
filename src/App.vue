@@ -285,17 +285,30 @@ function reconnectActive() {
   }
   doReconnect(ws.activeId);
 }
+// id of a connection whose reconnect failed because its SSH host key changed —
+// offer trust-new-key-and-retry instead of a dead-end "reconnect failed".
+const hostKeyFailId = ref<string | null>(null);
 async function doReconnect(id: string) {
   pendingReconnect.value = null;
   reconnecting.value = true;
   reconnectError.value = null;
+  hostKeyFailId.value = null;
   try {
     await ws.reconnect(id);
   } catch (e: any) {
-    reconnectError.value = e?.message ?? String(e);
+    const msg = e?.message ?? String(e);
+    reconnectError.value = msg;
+    if (/host key/i.test(msg) && connMeta(id)?.ssh) hostKeyFailId.value = id;
   } finally {
     reconnecting.value = false;
   }
+}
+async function forgetKeyAndReconnect(id: string) {
+  const ssh = connMeta(id)?.ssh;
+  if (!ssh) return;
+  await api.forgetHostKey(ssh.host, ssh.port);
+  hostKeyFailId.value = null;
+  await doReconnect(id);
 }
 let wasOffline = false;
 async function onOnline() {
@@ -378,6 +391,9 @@ onBeforeUnmount(() => {
         <div class="w-px h-4 bg-zinc-800 mx-1"></div>
         <span v-if="active?.isProduction" class="text-[10px] uppercase tracking-wide text-red-400 border border-red-900 rounded px-1">prod</span>
         <span v-if="reconnectError" class="text-[11px] text-red-400 truncate max-w-56" :title="reconnectError">reconnect failed</span>
+        <button v-if="hostKeyFailId" @click="forgetKeyAndReconnect(hostKeyFailId)" :disabled="reconnecting"
+          class="text-[11px] px-2 py-0.5 rounded border border-amber-800 text-amber-400 hover:bg-amber-950 disabled:opacity-50"
+          title="The server's SSH host key changed. Trust the new key and reconnect.">Trust new key &amp; reconnect</button>
         <button @click="reconnectActive" :disabled="reconnecting" class="ml-auto text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-50"
           title="Rebuild this connection (use after the network drops)">
           {{ reconnecting ? "Reconnecting…" : "Reconnect" }}
