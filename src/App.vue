@@ -274,12 +274,23 @@ function onKeydown(e: KeyboardEvent) {
 // ---- reconnect (network came back after being offline) ----
 const reconnecting = ref(false);
 const reconnectError = ref<string | null>(null);
-async function reconnectActive() {
+const pendingReconnect = ref<string | null>(null);
+function reconnectActive() {
   if (!ws.activeId || reconnecting.value) return;
+  // Reconnect tears down and rebuilds the connection, ROLLING BACK any open
+  // transaction — confirm first, same as Disconnect does.
+  if (queries.tabs.some((t) => t.connectionId === ws.activeId && t.txOpen)) {
+    pendingReconnect.value = ws.activeId;
+    return;
+  }
+  doReconnect(ws.activeId);
+}
+async function doReconnect(id: string) {
+  pendingReconnect.value = null;
   reconnecting.value = true;
   reconnectError.value = null;
   try {
-    await ws.reconnect(ws.activeId);
+    await ws.reconnect(id);
   } catch (e: any) {
     reconnectError.value = e?.message ?? String(e);
   } finally {
@@ -295,7 +306,11 @@ async function onOnline() {
   reconnecting.value = true;
   reconnectError.value = null;
   try {
-    await ws.reconnectAll();
+    const failures = await ws.reconnectAll();
+    if (failures.length) {
+      const names = failures.map((f) => connMeta(f.id)?.name ?? f.id).join(", ");
+      reconnectError.value = `Could not reconnect: ${names}`;
+    }
   } finally {
     reconnecting.value = false;
   }
@@ -332,6 +347,9 @@ onBeforeUnmount(() => {
       <header class="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800">
         <button @click="showSettings = true"
           class="text-zinc-500 hover:text-zinc-200 text-sm leading-none" title="Settings (⌘,)">⚙</button>
+        <button @click="showHelp = true"
+          class="text-zinc-500 hover:text-zinc-200 text-sm leading-none w-4 h-4 rounded-full border border-zinc-700 flex items-center justify-center"
+          title="Keyboard shortcuts (⌘⇧/)">?</button>
         <div class="w-px h-4 bg-zinc-800 mx-1"></div>
         <span v-if="active?.isProduction" class="text-[10px] uppercase tracking-wide text-red-400 border border-red-900 rounded px-1">prod</span>
         <span v-if="reconnectError" class="text-[11px] text-red-400 truncate max-w-56" :title="reconnectError">reconnect failed</span>
@@ -349,9 +367,13 @@ onBeforeUnmount(() => {
         <button v-for="c in ws.conns" :key="c.id" @click="ws.setActive(c.id)"
           class="px-2 py-1 rounded flex items-center gap-1.5 whitespace-nowrap"
           :class="ws.activeId === c.id ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:bg-zinc-900'">
-          <span class="w-2 h-2 rounded-full shrink-0" :class="colorClass[connMeta(c.id)?.color ?? 'gray']" />
+          <span v-if="c.health === 'live'" class="w-2 h-2 rounded-full shrink-0" :class="colorClass[connMeta(c.id)?.color ?? 'gray']" />
+          <span v-else class="w-2 h-2 rounded-full shrink-0"
+            :class="c.health === 'reconnecting' ? 'bg-amber-400 animate-pulse' : 'bg-red-500'"
+            :title="c.health === 'reconnecting' ? 'Reconnecting…' : 'Disconnected — use Reconnect'" />
           {{ connMeta(c.id)?.name ?? c.id }}
           <span class="text-[9px] uppercase text-zinc-500">{{ connMeta(c.id)?.engine }}</span>
+          <span v-if="c.health === 'dead'" class="text-[9px] uppercase text-red-400">offline</span>
           <span class="text-zinc-600 hover:text-red-400" @click.stop="requestCloseConn(c.id)">×</span>
         </button>
         <button @click="showLauncher = true" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-900"
@@ -415,6 +437,10 @@ onBeforeUnmount(() => {
       :message="`Disconnect from ${connMeta(pendingCloseConn)?.name}? A tab has an open transaction that will be ROLLED BACK.`"
       confirm-label="Disconnect & rollback" danger
       @confirm="closeConnectionFull(pendingCloseConn!)" @cancel="pendingCloseConn = null" />
+    <ConfirmModal v-if="pendingReconnect" title="Reconnect"
+      :message="`Reconnect ${connMeta(pendingReconnect)?.name}? A tab has an open transaction that will be ROLLED BACK.`"
+      confirm-label="Reconnect & rollback" danger
+      @confirm="doReconnect(pendingReconnect!)" @cancel="pendingReconnect = null" />
     <ConfirmModal v-if="pendingCloseTab" title="Open transaction"
       message="This tab has an uncommitted transaction. Closing it will ROLLBACK those changes."
       confirm-label="Close & rollback" danger

@@ -184,6 +184,17 @@ function runCurrent() {
   if (stmt) guardAndRun([stmt]);
 }
 
+// Run every statement in the editor (or the selection, if any) — an explicit
+// alternative to select-all-then-run, and to ⌘↵'s run-statement-under-cursor.
+function runAll() {
+  const v = view.value;
+  if (!v || running.value) return;
+  const sel = v.state.sliceDoc(v.state.selection.main.from, v.state.selection.main.to);
+  const src = sel.trim() ? sel : v.state.doc.toString();
+  const stmts = statements(src, splitOpts()).map((s) => s.text).filter((s) => s.trim());
+  if (stmts.length) guardAndRun(stmts);
+}
+
 onMounted(async () => {
   const schema = await loadSchema();
   const lang = sql({ dialect: dialectFor(), schema, upperCaseKeywords: true });
@@ -386,6 +397,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
     <div class="h-8 shrink-0 flex items-center gap-2 px-2 border-b border-zinc-800">
       <button @click="runCurrent" :disabled="running"
         class="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed">Run ⌘↵</button>
+      <button @click="runAll" :disabled="running" title="Run every statement in the editor"
+        class="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed">Run All</button>
       <button @click="saveCurrent" title="Save this query"
         class="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800">★ Save</button>
       <button v-if="running" @click="queries.cancel(tab)"

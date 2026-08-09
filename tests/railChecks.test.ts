@@ -154,3 +154,18 @@ describe("severe flag drives the typed-confirm escalation (Fix 3)", () => {
     expect(checkStatements(["UPDATE x SET y = 1"], rails, false)?.severe).toBe(false);
   });
 });
+
+describe("MySQL executable comments are not a rail bypass (Sofia Bug 4)", () => {
+  const rails = { warnNoWhere: true, warnDropTruncate: true, warnProductionWrites: true };
+  it("/*! DELETE ... */ is classified as an unqualified DELETE on mysql", () => {
+    const w = checkStatements(["/*! DELETE FROM users */"], rails, false, "mysql");
+    expect(w?.message).toContain("No WHERE");
+  });
+  it("/*!50000 DROP TABLE ... */ is flagged on mysql", () => {
+    const w = checkStatements(["/*!50000 DROP TABLE users */"], rails, false, "mysql");
+    expect(w?.title).toContain("DROP");
+  });
+  it("a normal /* comment */ is still stripped (non-executable)", () => {
+    expect(checkStatements(["/* DELETE FROM users */ SELECT 1"], rails, false, "mysql")).toBeNull();
+  });
+});

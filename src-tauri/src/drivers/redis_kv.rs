@@ -3,6 +3,52 @@ use crate::error::AppError;
 use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
 
+/// Max elements pulled for a single value so a huge hash/set/list/zset can't
+/// flood the wire or the DOM. The UI reports "showing N of M" and disables edit.
+const REDIS_VALUE_CAP: usize = 1000;
+
+/// SCAN-family loop that collects up to `cap` (field, value) pairs (HSCAN).
+async fn scan_pairs(
+    c: &mut MultiplexedConnection,
+    cmd: &str,
+    key: &str,
+    cap: usize,
+) -> Result<Vec<(String, String)>, AppError> {
+    let mut cursor: u64 = 0;
+    let mut out: Vec<(String, String)> = Vec::new();
+    loop {
+        let (next, chunk): (u64, Vec<String>) = redis::cmd(cmd)
+            .arg(key).arg(cursor).arg("COUNT").arg(256)
+            .query_async(c).await?;
+        let mut it = chunk.into_iter();
+        while let (Some(f), Some(v)) = (it.next(), it.next()) {
+            out.push((f, v));
+            if out.len() >= cap { return Ok(out); }
+        }
+        cursor = next;
+        if cursor == 0 { break; }
+    }
+    Ok(out)
+}
+
+/// SSCAN loop that collects up to `cap` set members.
+async fn scan_members(c: &mut MultiplexedConnection, key: &str, cap: usize) -> Result<Vec<String>, AppError> {
+    let mut cursor: u64 = 0;
+    let mut out: Vec<String> = Vec::new();
+    loop {
+        let (next, chunk): (u64, Vec<String>) = redis::cmd("SSCAN")
+            .arg(key).arg(cursor).arg("COUNT").arg(256)
+            .query_async(c).await?;
+        for m in chunk {
+            out.push(m);
+            if out.len() >= cap { return Ok(out); }
+        }
+        cursor = next;
+        if cursor == 0 { break; }
+    }
+    Ok(out)
+}
+
 pub struct RedisDriver { conn: MultiplexedConnection }
 
 impl RedisDriver {
@@ -57,14 +103,20 @@ impl KvDriver for RedisDriver {
         let (value, total_items) = match kind.as_str() {
             "string" => (RedisValueDto::String { value: c.get(key).await? }, None),
             "hash" => {
-                let map: Vec<(String, String)> = redis::cmd("HGETALL").arg(key).query_async(&mut c).await?;
-                (RedisValueDto::Hash { fields: map }, None)
+                // HSCAN-capped so a huge hash doesn't pull everything / flood the DOM
+                let total: i64 = c.hlen(key).await?;
+                let fields = scan_pairs(&mut c, "HSCAN", key, REDIS_VALUE_CAP).await?;
+                (RedisValueDto::Hash { fields }, Some(total as u64))
             }
             "list" => {
                 let total: i64 = c.llen(key).await?;
-                (RedisValueDto::List { items: c.lrange(key, 0, 999).await? }, Some(total as u64))
+                (RedisValueDto::List { items: c.lrange(key, 0, (REDIS_VALUE_CAP - 1) as isize).await? }, Some(total as u64))
             }
-            "set" => (RedisValueDto::Set { members: c.smembers(key).await? }, None),
+            "set" => {
+                let total: i64 = c.scard(key).await?;
+                let members = scan_members(&mut c, key, REDIS_VALUE_CAP).await?;
+                (RedisValueDto::Set { members }, Some(total as u64))
+            }
             "zset" => {
                 let total: i64 = c.zcard(key).await?;
                 let members: Vec<(String, f64)> = c.zrange_withscores(key, 0, 999).await?;

@@ -620,12 +620,55 @@ fn skip_parens(b: &[u8], mut i: usize) -> usize {
     i
 }
 
+/// Finds the next statement-separating `;`, skipping ones inside string literals,
+/// `[bracketed]` identifiers and comments. Returns None if there is none.
+fn next_semicolon(b: &[u8], mut i: usize) -> Option<usize> {
+    while i < b.len() {
+        match b[i] {
+            b'\'' => {
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\'' { if b.get(i + 1) == Some(&b'\'') { i += 2; continue; } break; }
+                    i += 1;
+                }
+            }
+            b'[' => { i += 1; while i < b.len() && b[i] != b']' { i += 1; } }
+            b'-' if b.get(i + 1) == Some(&b'-') => { while i < b.len() && b[i] != b'\n' { i += 1; } }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') { i += 1; }
+                i += 1;
+            }
+            b';' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Whether a batch should run through execute() to get accurate affected-row
 /// counts: plain DML, or CTE-led DML (`WITH … UPDATE/DELETE/INSERT/MERGE`).
-/// Skips leading comments so `-- JIRA-123` annotations don't defeat detection.
+/// Skips leading comments so `-- JIRA-123` annotations don't defeat detection,
+/// and leading `SET …;` / `DECLARE …;` statements so `SET NOCOUNT OFF; UPDATE …`
+/// and `DECLARE @x INT; DELETE …` still report their affected-row count.
 fn is_dml_batch(sql: &str) -> bool {
     let b = sql.as_bytes();
-    let i = skip_ws_comments(b, 0);
+    let mut i = skip_ws_comments(b, 0);
+    // Skip any run of leading SET/DECLARE statements (they configure the session
+    // or allocate variables and never return a result set). Stop as soon as the
+    // next statement is something else — that statement decides the routing.
+    loop {
+        let (kw, after) = read_word(b, i);
+        if kw == "set" || kw == "declare" {
+            match next_semicolon(b, after) {
+                Some(semi) => { i = skip_ws_comments(b, semi + 1); }
+                None => return false, // only a SET/DECLARE, no DML to count
+            }
+        } else {
+            break;
+        }
+    }
     let (kw, mut i) = read_word(b, i);
     match kw.as_str() {
         "insert" | "update" | "delete" | "merge" => true,
@@ -670,24 +713,31 @@ impl MssqlSession {
             return Ok(());
         }
         let mut stream = self.client.simple_query(sql).await?;
-        let mut sent_cols = false;
+        // Each result set carries a result_index; when it changes, flush the
+        // previous set's rows and emit fresh Columns so a `SELECT …; SELECT …`
+        // batch (or a multi-result proc) becomes separate grids instead of one
+        // grid with rows from set 2 rendered under set 1's headers.
+        let mut cur_idx: Option<usize> = None;
         let mut chunk: Vec<Vec<serde_json::Value>> = vec![];
         let mut row_count = 0u64;
         while let Some(item) = stream.try_next().await? {
             match item {
                 tiberius::QueryItem::Metadata(meta) => {
-                    if !sent_cols {
+                    if cur_idx != Some(meta.result_index()) {
+                        if !chunk.is_empty() { let _ = tx.send(QueryEvent::Rows(std::mem::take(&mut chunk))).await; }
                         let cols = meta.columns().iter()
                             .map(|c| ColumnMeta { name: c.name().to_string(), data_type: format!("{:?}", c.column_type()) })
                             .collect();
                         let _ = tx.send(QueryEvent::Columns(cols)).await;
-                        sent_cols = true;
+                        cur_idx = Some(meta.result_index());
                     }
                 }
                 tiberius::QueryItem::Row(row) => {
-                    if !sent_cols {
+                    if cur_idx != Some(row.result_index()) {
+                        // a row for a new set without preceding metadata (rare)
+                        if !chunk.is_empty() { let _ = tx.send(QueryEvent::Rows(std::mem::take(&mut chunk))).await; }
                         let _ = tx.send(QueryEvent::Columns(row_columns(&row))).await;
-                        sent_cols = true;
+                        cur_idx = Some(row.result_index());
                     }
                     chunk.push(row_cells(&row));
                     row_count += 1;
@@ -830,6 +880,43 @@ mod session_test {
         assert!(rows >= 2, "expected >=2 rows, got {rows}");
         assert!(done);
         println!("session SELECT: {cols} cols, {rows} rows");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn multi_result_sets_emit_separate_columns_and_dml_counts() {
+        let d = super::live_tests::_drv().await;
+        let mut sess = d.acquire_session().await.expect("session");
+
+        // Fix 1: a two-SELECT batch must emit TWO Columns events (one per set).
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        sess.stream("SELECT 1 AS a, 2 AS b; SELECT 'hi' AS greeting", tx).await.expect("stream");
+        let mut col_events: Vec<Vec<String>> = vec![];
+        while let Some(ev) = rx.recv().await {
+            if let QueryEvent::Columns(c) = ev { col_events.push(c.iter().map(|x| x.name.clone()).collect()); }
+        }
+        assert_eq!(col_events.len(), 2, "expected 2 Columns events, got {col_events:?}");
+        assert_eq!(col_events[0], vec!["a", "b"]);
+        assert_eq!(col_events[1], vec!["greeting"]);
+
+        // Fix 3: a SET-prefixed UPDATE must report the real affected-row count.
+        run_dml(&mut sess, "IF OBJECT_ID('dbo.xp_aff','U') IS NOT NULL DROP TABLE dbo.xp_aff").await;
+        run_dml(&mut sess, "CREATE TABLE dbo.xp_aff (id INT, v INT)").await;
+        run_dml(&mut sess, "INSERT INTO dbo.xp_aff VALUES (1,1),(2,2),(3,3)").await;
+        let affected = run_dml(&mut sess, "SET NOCOUNT OFF; UPDATE dbo.xp_aff SET v = v + 1").await;
+        assert_eq!(affected, 3, "SET NOCOUNT OFF; UPDATE should report 3 affected");
+        run_dml(&mut sess, "DROP TABLE dbo.xp_aff").await;
+        println!("multi-result-set + affected-rows OK (affected={affected})");
+    }
+
+    async fn run_dml(sess: &mut Box<dyn crate::drivers::QuerySession>, sql: &str) -> u64 {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        sess.stream(sql, tx).await.expect("dml stream");
+        let mut affected = 0u64;
+        while let Some(ev) = rx.recv().await {
+            if let QueryEvent::Done { affected_rows, .. } = ev { affected = affected_rows; }
+        }
+        affected
     }
 }
 
@@ -988,5 +1075,20 @@ mod router_tests {
         assert!(is_dml_batch("WITH c AS (SELECT id FROM t WHERE s = ')') UPDATE c SET id = 1"));
         assert!(is_dml_batch("with a (x) as (select 1), b as (select 2) delete from t"));
         assert!(!is_dml_batch("WITH c AS (SELECT 1 AS x) SELECT * FROM c"));
+    }
+
+    #[test]
+    fn leading_set_declare_then_dml_still_routes_to_execute() {
+        // Sofia Bug 2: a SET/DECLARE prefix must not hide the affected-row count.
+        assert!(is_dml_batch("SET NOCOUNT OFF; UPDATE dbo.t SET v = v + 1"));
+        assert!(is_dml_batch("SET NOCOUNT ON;\nDELETE FROM dbo.t"));
+        assert!(is_dml_batch("DECLARE @x INT = 5; UPDATE t SET v = @x"));
+        assert!(is_dml_batch("SET ANSI_NULLS ON; SET NOCOUNT ON; INSERT INTO t VALUES (1)"));
+        // a semicolon inside a string in the SET must not end the statement early
+        assert!(is_dml_batch("SET @msg = 'a; b'; UPDATE t SET v = 1"));
+        // still correctly NOT dml when the real statement is a select or routine
+        assert!(!is_dml_batch("SET NOCOUNT ON; SELECT * FROM t"));
+        assert!(!is_dml_batch("DECLARE @x INT; SELECT @x"));
+        assert!(!is_dml_batch("SET NOCOUNT ON")); // no following statement
     }
 }

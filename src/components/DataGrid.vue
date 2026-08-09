@@ -86,7 +86,7 @@ function inspectorSetNull(column: string) {
 // PAGE+1, show PAGE). Deterministic end-of-data — no more "Next → empty grid".
 const hasMore = ref(false);
 const rangeLabel = computed(() => {
-  if (!rows.value.length) return "0 rows";
+  if (!rows.value.length) return "0"; // template appends " rows" → "0 rows"
   const start = pageIndex.value * PAGE + 1;
   const end = start + rows.value.length - 1;
   const total = page.value?.totalEstimate;
@@ -312,12 +312,12 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
             <th v-for="x in visibleCols" :key="x.c.name" class="px-1 pb-1 border-b border-zinc-800"><template v-for="c in [x.c]" :key="c.name">
               <div class="flex gap-0.5">
                 <select v-model="filterOps[c.name]" @change="onOpChange(c.name)"
-                  class="bg-zinc-900 border border-zinc-800 rounded text-[10px] font-sans text-zinc-500 outline-none w-9">
-                  <option :value="undefined">~</option>
-                  <option value="contains">~</option>
-                  <option value="equals">=</option>
-                  <option value="isNull">∅</option>
-                  <option value="notNull">!∅</option>
+                  title="Filter operator" aria-label="Filter operator"
+                  class="bg-zinc-900 border border-zinc-800 rounded text-[10px] font-sans text-zinc-400 outline-none w-20">
+                  <option value="contains">contains</option>
+                  <option value="equals">equals</option>
+                  <option value="isNull">is null</option>
+                  <option value="notNull">not null</option>
                 </select>
                 <input ref="filterInputs" v-model="filterDrafts[c.name]" @keydown.enter="applyFilter(c.name)"
                   placeholder="filter…"

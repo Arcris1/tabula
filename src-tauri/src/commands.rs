@@ -52,19 +52,41 @@ async fn open_connection(
         }
     }
 
+    // Fast reachability probe (post-tunnel) so a wrong port or unreachable host
+    // fails in <1s with a clear message instead of an 8s pool-acquire timeout
+    // that gets mislabeled "timed out". SQLite is a local file — skip it.
+    if !matches!(cfg.engine, Engine::Sqlite) {
+        let addr = format!("{host}:{port}");
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::net::TcpStream::connect(&addr),
+        ).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(AppError::connection(
+                format!("Can't reach the server at {addr} — check the host and port, and that the server is running."),
+            ).with_detail(e.to_string())),
+            Err(_) => return Err(AppError::timeout(
+                format!("No response from {addr} within 5s — check the host and port, and that the server is reachable."),
+            )),
+        }
+    }
+
+    // Humanize connection-attempt failures into plain, consistent messages
+    // (query errors elsewhere keep the database's own wording).
+    let hc = AppError::humanize_connect;
     let conn = match cfg.engine {
-        Engine::Sqlite => LiveConnection::Sql(Box::new(SqliteDriver::connect(db).await?)),
+        Engine::Sqlite => LiveConnection::Sql(Box::new(SqliteDriver::connect(db).await.map_err(hc)?)),
         Engine::Mysql => LiveConnection::Sql(Box::new(
-            MysqlDriver::connect(&host, port, user, pw, db).await?,
+            MysqlDriver::connect(&host, port, user, pw, db).await.map_err(hc)?,
         )),
         Engine::Postgres => LiveConnection::Sql(Box::new(
-            PostgresDriver::connect(&host, port, user, pw, db).await?,
+            PostgresDriver::connect(&host, port, user, pw, db).await.map_err(hc)?,
         )),
         Engine::Mssql => LiveConnection::Sql(Box::new(
-            crate::drivers::mssql::MssqlDriver::connect(&host, port, user, pw, db).await?,
+            crate::drivers::mssql::MssqlDriver::connect(&host, port, user, pw, db).await.map_err(hc)?,
         )),
         Engine::Redis => LiveConnection::Kv(Box::new(
-            RedisDriver::connect(&host, port, password, db.parse().unwrap_or(0)).await?,
+            RedisDriver::connect(&host, port, password, db.parse().unwrap_or(0)).await.map_err(hc)?,
         )),
     };
     Ok((conn, tunnel))

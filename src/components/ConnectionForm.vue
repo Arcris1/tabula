@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import type { ConnectionConfig, Engine, EnvColor } from "../lib/api";
 import { useConnectionsStore } from "../stores/connections";
 
@@ -42,6 +42,7 @@ function onColorPick(c: EnvColor) {
   if (c === "red") form.isProduction = true;
 }
 async function test() {
+  if (validationError.value) { testState.value = "fail"; testMessage.value = validationError.value; return; }
   testState.value = "testing";
   try {
     await store.test(effectiveConfig(), password.value || undefined, sshSecret.value || undefined);
@@ -52,11 +53,25 @@ async function test() {
     testMessage.value = e?.message ?? String(e);
   }
 }
+const isFile = () => form.engine === "sqlite";
+
+// Validate before we bother the network, so a blank host doesn't turn into
+// DNS gibberish from the driver. Server engines need a host + a valid port;
+// SQLite needs a file path.
+const validationError = computed<string | null>(() => {
+  if (!(form.name ?? "").trim()) return "Give the connection a name.";
+  if (isFile()) return (form.database ?? "").trim() ? null : "Choose a SQLite database file.";
+  if (!(form.host ?? "").trim()) return "Host is required.";
+  if (!form.port || form.port < 1 || form.port > 65535) return "Port must be between 1 and 65535.";
+  if (sshEnabled.value && !(ssh.host ?? "").trim()) return "SSH host is required when using a tunnel.";
+  return null;
+});
+
 async function save() {
+  if (validationError.value) return;
   await store.save(effectiveConfig(), password.value || undefined, sshSecret.value || undefined);
   emit("saved");
 }
-const isFile = () => form.engine === "sqlite";
 </script>
 
 <template>
@@ -127,8 +142,10 @@ const isFile = () => form.engine === "sqlite";
       <span v-if="testState === 'fail'" class="text-red-400 text-xs truncate">{{ testMessage }}</span>
       <div class="ml-auto flex gap-2">
         <button type="button" @click="emit('cancel')" class="px-3 py-1.5 rounded text-zinc-400 hover:bg-zinc-800">Cancel</button>
-        <button type="submit" class="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white">Save</button>
+        <button type="submit" :disabled="!!validationError" :title="validationError ?? ''"
+          class="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
       </div>
     </div>
+    <p v-if="validationError" class="text-amber-400/80 text-xs -mt-1">{{ validationError }}</p>
   </form>
 </template>

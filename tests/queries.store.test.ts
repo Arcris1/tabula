@@ -196,6 +196,29 @@ describe("queries store (multi-run)", () => {
     expect(tab.runs[0].truncated).toBeFalsy();
   });
 
+  it("splits a statement's multiple result sets into separate grids (Sofia Bug 1)", async () => {
+    const q = useQueriesStore();
+    const tab = q.addTab("conn-1");
+    const batch = q.run(tab, ["SELECT 1 AS a; SELECT 'hi' AS greeting"]);
+    await tick();
+    const qid = tab.runs[0].queryId;
+    // result set 1
+    q.handleEvent("query:columns", { queryId: qid, columns: [{ name: "a" }] });
+    q.handleEvent("query:rows", { queryId: qid, rows: [[1]] });
+    // result set 2 — a second columns event opens its own grid
+    q.handleEvent("query:columns", { queryId: qid, columns: [{ name: "greeting" }] });
+    q.handleEvent("query:rows", { queryId: qid, rows: [["hi"]] });
+    q.handleEvent("query:done", { queryId: qid, rowCount: 2, affectedRows: 0, elapsedMs: 3 });
+    await batch;
+
+    expect(tab.runs).toHaveLength(2);
+    expect(tab.runs[0].columns.map((c: any) => c.name)).toEqual(["a"]);
+    expect(tab.runs[0].rows).toEqual([[1]]);
+    expect(tab.runs[1].columns.map((c: any) => c.name)).toEqual(["greeting"]);
+    expect(tab.runs[1].rows).toEqual([["hi"]]); // NOT rendered under column "a"
+    expect(tab.runs.every((r: any) => r.status === "done")).toBe(true);
+  });
+
   it("ignores events for unknown query ids", async () => {
     const q = useQueriesStore();
     const tab = q.addTab("conn-1");

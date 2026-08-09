@@ -110,10 +110,20 @@ function save() {
     }
   });
 }
+const ttlError = ref<string | null>(null);
 function applyTtl() {
   if (!props.entry || !ws.activeId) return;
+  // "Set" only sets a positive expiry. 0/blank/negative used to silently remove
+  // the expiry (PERSIST) — surprising when 0 reads like "expire now". Removing
+  // the expiry is the explicit Persist button; deleting now is the Delete button.
+  const secs = ttlInput.value;
+  if (secs == null || secs <= 0) {
+    ttlError.value = "Enter a positive number of seconds. Use “Persist” to remove the expiry, or “Delete” to remove the key.";
+    return;
+  }
+  ttlError.value = null;
   guardProd(async () => {
-    await api.setRedisTtl(ws.activeId!, props.entry!.key, ttlInput.value ?? 0);
+    await api.setRedisTtl(ws.activeId!, props.entry!.key, secs);
     emit("changed");
   });
 }
@@ -156,8 +166,9 @@ async function doDelete() {
         <span>TTL</span>
         <input v-model.number="ttlInput" type="number" placeholder="seconds"
           class="w-24 bg-zinc-900 border border-zinc-800 rounded px-1 py-0.5 outline-none focus:border-zinc-600" />
-        <button @click="applyTtl" class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800">Set</button>
-        <button @click="persist" class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800">Persist</button>
+        <button @click="applyTtl" class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800" title="Set a positive expiry in seconds">Set</button>
+        <button @click="persist" class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800" title="Remove the expiry (key never expires)">Persist</button>
+        <span v-if="ttlError" class="text-amber-400/80 text-[10px] max-w-64">{{ ttlError }}</span>
       </div>
 
       <div v-if="editing" class="flex-1 flex flex-col p-3 gap-2">

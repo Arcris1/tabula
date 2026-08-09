@@ -121,16 +121,29 @@ export interface CommentOptions {
   hashComments?: boolean;
 }
 
-/** Removes -- , C-style and (mysql) # comments (string-aware) so guards can't be fooled by them. */
+/** Removes -- , C-style and (mysql) # comments (string-aware) so guards can't be fooled by them.
+ *  Exception: MySQL executable comments `/*! … *​/` (optionally `/*!50000 …`) are
+ *  RUN by the server, so their contents are kept as code — otherwise a
+ *  `/*! DELETE FROM users *​/` would slip past the no-WHERE rail. */
 export function stripComments(sql: string, opts: CommentOptions = {}): string {
   let out = "";
   let mode: "code" | "sq" | "dq" | "bq" | "line" | "block" = "code";
+  let execDepth = 0;
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i], next = sql[i + 1];
     if (mode === "code") {
+      if (execDepth > 0 && ch === "*" && next === "/") { execDepth--; i++; continue; } // close of /*! … */
       if (ch === "-" && next === "-") { mode = "line"; i++; continue; }
       if (opts.hashComments && ch === "#") { mode = "line"; continue; }
-      if (ch === "/" && next === "*") { mode = "block"; i++; continue; }
+      if (ch === "/" && next === "*") {
+        if (opts.hashComments && sql[i + 2] === "!") {
+          i += 2; // skip "/*!"
+          while (i + 1 < sql.length && /\d/.test(sql[i + 1]!)) i++; // optional version prefix
+          execDepth++;
+          continue;
+        }
+        mode = "block"; i++; continue;
+      }
       if (ch === "'") mode = "sq";
       else if (ch === '"') mode = "dq";
       else if (ch === "`") mode = "bq";

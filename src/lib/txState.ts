@@ -27,7 +27,12 @@ export function txEffect(sql: string, dialect: TxDialect = "other"): "begin" | "
   if (first === "rollback") {
     // ROLLBACK TO [SAVEPOINT] x keeps the transaction open
     if (words[1] === "to") return null;
-    return words[1] === "and" && words[2] === "chain" ? null : "end";
+    if (words[1] === "and" && words[2] === "chain") return null; // ROLLBACK AND CHAIN
+    // T-SQL: ROLLBACK TRAN[SACTION] <savepoint> rolls back to a savepoint and
+    // leaves @@TRANCOUNT unchanged — the transaction is still open. Only a BARE
+    // ROLLBACK / ROLLBACK TRAN[SACTION] (no name) actually ends it.
+    if ((words[1] === "tran" || words[1] === "transaction") && words[2]) return null;
+    return "end";
   }
   if (dialect === "mysql" && MYSQL_IMPLICIT_COMMIT.has(first)) return "end";
   return null;

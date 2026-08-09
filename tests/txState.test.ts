@@ -56,3 +56,21 @@ describe("T-SQL BEGIN blocks vs transactions", () => {
     expect(txEffect("BEGIN ISOLATION LEVEL SERIALIZABLE")).toBe("begin");
   });
 });
+
+describe("T-SQL savepoint rollback keeps the transaction open (Sofia Bug 3)", () => {
+  it("ROLLBACK TRAN <savepoint> does NOT end the transaction", () => {
+    expect(txEffect("ROLLBACK TRAN sp1", "other")).toBeNull();
+    expect(txEffect("ROLLBACK TRANSACTION my_savepoint", "other")).toBeNull();
+    expect(txEffect("ROLLBACK TRANSACTION my_savepoint;", "other")).toBeNull();
+  });
+  it("bare ROLLBACK / ROLLBACK TRAN still ends it", () => {
+    expect(txEffect("ROLLBACK", "other")).toBe("end");
+    expect(txEffect("ROLLBACK TRAN", "other")).toBe("end");
+    expect(txEffect("ROLLBACK TRANSACTION", "other")).toBe("end");
+    expect(txEffect("ROLLBACK WORK", "other")).toBe("end");
+  });
+  it("ROLLBACK TO SAVEPOINT and AND CHAIN still keep it open", () => {
+    expect(txEffect("ROLLBACK TO SAVEPOINT x", "other")).toBeNull();
+    expect(txEffect("ROLLBACK AND CHAIN", "other")).toBeNull();
+  });
+});

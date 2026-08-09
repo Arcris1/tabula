@@ -14,6 +14,9 @@ interface ConnState {
   pendingFilter: { column: string; value: string } | null;
   /** active sub-view for this connection: "data" | "structure" | <queryTabId> */
   mainTab: string;
+  /** liveness shown in the tab bar so a blip doesn't leave a dead connection
+   *  looking alive: "live" | "reconnecting" | "dead". */
+  health: "live" | "reconnecting" | "dead";
 }
 
 export const useWorkspaceStore = defineStore("workspace", () => {
@@ -51,6 +54,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       conns.value.push({
         id, paradigm: p, tables: [], functions: [],
         selectedTable: null, openTables: [], pendingFilter: null, mainTab: "data",
+        health: "live",
       });
       activeId.value = id;
       if (p === "sql") { await loadTables(); loadFunctions(); }
@@ -126,16 +130,36 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function reconnect(id: string) {
     const c = get(id);
     if (!c) return;
-    const p = await api.reconnect(id); // throws if still unreachable
-    c.paradigm = p;
-    if (activeId.value === id && p === "sql") {
-      await loadTables();
-      loadFunctions();
+    c.health = "reconnecting";
+    try {
+      const p = await api.reconnect(id); // throws if still unreachable
+      c.paradigm = p;
+      c.health = "live";
+      if (activeId.value === id && p === "sql") {
+        await loadTables();
+        loadFunctions();
+      }
+    } catch (e) {
+      c.health = "dead"; // leave it visibly dead in the tab bar
+      throw e;
     }
   }
-  /** Reconnect every open connection (best-effort; one failure doesn't block the rest). */
-  async function reconnectAll() {
-    await Promise.allSettled(conns.value.map((c) => reconnect(c.id)));
+  /** Reconnect every open connection. Best-effort (one failure doesn't block the
+   *  rest) but returns the failures so the caller can surface them — a silent
+   *  bulk reconnect used to leave dead connections looking alive. */
+  async function reconnectAll(): Promise<{ id: string; error: string }[]> {
+    const ids = conns.value.map((c) => c.id);
+    const results = await Promise.allSettled(ids.map((id) => reconnect(id)));
+    const failures: { id: string; error: string }[] = [];
+    results.forEach((r, i) => {
+      if (r.status === "rejected") failures.push({ id: ids[i], error: String((r.reason as any)?.message ?? r.reason) });
+    });
+    return failures;
+  }
+  /** Mark a connection dead — e.g. when a query fails because the link dropped. */
+  function markDead(id: string) {
+    const c = get(id);
+    if (c) c.health = "dead";
   }
 
   /** Disconnect and remove ONE connection; switch active to a neighbour. */
@@ -171,6 +195,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     conns, activeId, isOpen,
     paradigm, tables, functions, selectedTable, openTables, pendingFilter, mainTab,
     tableKey, get, addConnection, setActive, openFresh, loadTables, loadFunctions,
-    selectTable, navigateToRow, closeTable, reconnect, reconnectAll, closeConnection, close,
+    selectTable, navigateToRow, closeTable, reconnect, reconnectAll, markDead, closeConnection, close,
   };
 });

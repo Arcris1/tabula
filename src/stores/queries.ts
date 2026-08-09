@@ -99,28 +99,30 @@ export const useQueriesStore = defineStore("queries", () => {
       // register the run BEFORE invoking so a fast query's events can never
       // arrive unmatched (the invoke round-trip may resolve after query:done)
       const queryId = crypto.randomUUID();
-      tab.runs.push({
+      // Hold a reference: a statement may append extra runs (one per result set),
+      // so a fixed index into tab.runs no longer identifies this statement's run.
+      const created: QueryRun = {
         queryId, columns: [], rows: [], messages: [], status: "running",
         sql: stmts[i], startedAtMs: Date.now(),
-      });
-      tab.activeRunIndex = i;
+      };
+      tab.runs.push(created);
+      tab.activeRunIndex = tab.runs.length - 1;
       const done = new Promise<void>((resolve) => completions.set(queryId, resolve));
       api.runQuery(ws.activeId, stmts[i], queryId, tab.id).catch((e: any) => {
-        const run = findRun(queryId);
-        if (run && run.status === "running") {
-          run.status = "error";
-          run.error = e?.message ?? String(e);
-          record(run, "error");
+        if (created.status === "running") {
+          created.status = "error";
+          created.error = e?.message ?? String(e);
+          record(created, "error");
         }
         settle(queryId);
       });
       await done;
-      if (tab.runs[i]?.status === "done") {
+      if (created.status === "done") {
         const effect = txEffect(stmts[i], dialect);
         if (effect === "begin") tab.txOpen = true;
         else if (effect === "end") tab.txOpen = false;
       }
-      if (tab.runs[i]?.status === "error") break;
+      if (created.status === "error") break;
     }
     cancelled.delete(tab.id);
   }
@@ -148,10 +150,18 @@ export const useQueriesStore = defineStore("queries", () => {
     }
   }
 
-  function findRun(queryId: string): QueryRun | null {
+  function tabOf(queryId: string): QueryTab | null {
+    return tabs.value.find((t) => t.runs.some((r) => r.queryId === queryId)) ?? null;
+  }
+
+  // The LATEST run for a queryId. A single statement can yield several result
+  // sets (T-SQL `SELECT…; SELECT…`, a proc returning multiple sets, MySQL CALL);
+  // each new set opens a fresh run, and rows/messages flow to the newest one.
+  function latestRun(queryId: string): QueryRun | null {
     for (const t of tabs.value) {
-      const r = t.runs.find((r) => r.queryId === queryId);
-      if (r) return r;
+      for (let i = t.runs.length - 1; i >= 0; i--) {
+        if (t.runs[i].queryId === queryId) return t.runs[i];
+      }
     }
     return null;
   }
@@ -178,23 +188,47 @@ export const useQueriesStore = defineStore("queries", () => {
   }
 
   function handleEvent(name: string, payload: any) {
-    const run = findRun(payload.queryId);
+    const qid = payload.queryId;
+    if (name === "query:columns") {
+      const run = latestRun(qid);
+      if (!run) return;
+      // First columns for a fresh run = this statement's first result set.
+      // Columns arriving after a run already has data = a NEW result set, so
+      // open its own grid (a sibling run sharing the queryId).
+      if (run.columns.length === 0 && run.rows.length === 0) {
+        run.columns = payload.columns;
+      } else {
+        const tab = tabOf(qid);
+        if (!tab) return;
+        tab.runs.push({
+          queryId: qid, columns: payload.columns, rows: [], messages: [],
+          status: "running", sql: run.sql, startedAtMs: run.startedAtMs,
+        });
+      }
+      return;
+    }
+    const run = latestRun(qid);
     if (!run) return;
-    if (name === "query:columns") run.columns = payload.columns;
-    else if (name === "query:rows") appendRows(run, payload.rows);
+    if (name === "query:rows") appendRows(run, payload.rows);
     else if (name === "query:message") run.messages.push(payload.message);
     else if (name === "query:done") {
-      run.status = "done";
-      run.rowCount = payload.rowCount;
-      run.affectedRows = payload.affectedRows;
-      run.elapsedMs = payload.elapsedMs;
-      record(run, "ok");
-      settle(payload.queryId);
+      const tab = tabOf(qid);
+      const runs = tab ? tab.runs.filter((r) => r.queryId === qid) : [run];
+      for (const r of runs) if (r.status === "running") r.status = "done";
+      // Single set: keep the backend's true total (survives the 10k grid cap).
+      // Multiple sets: each grid reports its own row count.
+      if (runs.length === 1) runs[0].rowCount = payload.rowCount;
+      else for (const r of runs) r.rowCount = r.rows.length;
+      const last = runs[runs.length - 1];
+      last.affectedRows = payload.affectedRows;
+      last.elapsedMs = payload.elapsedMs;
+      record(last, "ok");
+      settle(qid);
     } else if (name === "query:error") {
       run.status = "error";
       run.error = payload.error?.message ?? "query failed";
       record(run, "error");
-      settle(payload.queryId);
+      settle(qid);
     }
   }
 

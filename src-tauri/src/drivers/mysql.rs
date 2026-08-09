@@ -338,14 +338,24 @@ impl QuerySession for MysqlSession {
             return Ok(());
         }
         let mut stream = sqlx::query(sql).fetch_many(&mut *self.conn);
+        // `Left` marks the end of one result set. If that set produced rows, flush
+        // them and reset so the NEXT set emits fresh Columns (a separate grid) —
+        // a `CALL proc` returning several selects no longer collapses into one.
         let mut sent_cols = false;
         let mut chunk: Vec<Vec<serde_json::Value>> = vec![];
         let (mut row_count, mut affected) = (0u64, 0u64);
         while let Some(item) = stream.try_next().await.map_err(AppError::from)? {
             match item {
-                sqlx::Either::Left(res) => affected += res.rows_affected(),
+                sqlx::Either::Left(res) => {
+                    affected += res.rows_affected();
+                    if sent_cols {
+                        if !chunk.is_empty() { let _ = tx.send(QueryEvent::Rows(std::mem::take(&mut chunk))).await; }
+                        sent_cols = false; // next Right starts a new result set
+                    }
+                }
                 sqlx::Either::Right(row) => {
                     if !sent_cols {
+                        if !chunk.is_empty() { let _ = tx.send(QueryEvent::Rows(std::mem::take(&mut chunk))).await; }
                         let _ = tx.send(QueryEvent::Columns(row_columns(&row))).await;
                         sent_cols = true;
                     }
