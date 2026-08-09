@@ -85,24 +85,37 @@ Output:
 
 ### Windows
 
-1. Install **Microsoft C++ Build Tools** (the "Desktop development with C++" workload) and
-   the **WebView2 Runtime** (preinstalled on Windows 11).
-2. Then:
+**One-time setup — install these first:**
 
-   ```powershell
-   npm install
-   npm run tauri build
-   ```
+1. [**Rust**](https://rustup.rs) — run `rustup-init.exe`; accept the default **MSVC** toolchain.
+2. [**Node.js**](https://nodejs.org) 20 or newer.
+3. [**Microsoft C++ Build Tools**](https://visualstudio.microsoft.com/visual-cpp-build-tools/) —
+   in the installer, tick the **"Desktop development with C++"** workload (this provides the
+   linker Rust needs). Visual Studio Community with that workload works too.
+4. [**WebView2 Runtime**](https://developer.microsoft.com/microsoft-edge/webview2/) — already on
+   Windows 11; install the Evergreen runtime on Windows 10.
 
-Output:
+**Get the code and build** (PowerShell):
+
+```powershell
+git clone https://github.com/Arcris1/tabula.git
+cd tabula
+npm install
+npm run tauri build
+```
+
+That produces installers you can double-click:
 - MSI: `src-tauri\target\release\bundle\msi\Tabula_<version>_x64_en-US.msi`
 - Setup EXE: `src-tauri\target\release\bundle\nsis\Tabula_<version>_x64-setup.exe`
+
+**Just want to run it without installing?** `npm run tauri dev` launches the app directly
+(first run compiles the Rust backend, so give it a few minutes).
 
 ### Build Windows from macOS/Linux (via GitHub Actions)
 
 No Windows machine needed — a CI workflow builds the installers for you:
 
-1. Push this repo to GitHub.
+1. Push your commits to GitHub (this repo is already at `github.com/Arcris1/tabula`).
 2. **Actions** tab → **Build Windows** → **Run workflow** (or push a `v*` tag).
 3. Download the **`tabula-windows-installers`** artifact (contains the `.msi` and `.exe`).
 
