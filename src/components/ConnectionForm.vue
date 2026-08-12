@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
-import type { ConnectionConfig, Engine, EnvColor } from "../lib/api";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { api, type ConnectionConfig, type Engine, type EnvColor } from "../lib/api";
 import { useConnectionsStore } from "../stores/connections";
 
 const props = defineProps<{ initial?: ConnectionConfig | null }>();
@@ -54,6 +55,20 @@ async function test() {
   }
 }
 const isFile = () => form.engine === "sqlite";
+
+// Pick the SQLite file through the system dialog. Under the Mac App Store sandbox
+// this is the ONLY way the app gets access to it — a typed path grants nothing —
+// and remember_file persists that grant across relaunches. Harmless elsewhere.
+async function browseSqlite() {
+  const path = await openDialog({
+    multiple: false,
+    filters: [{ name: "SQLite database", extensions: ["sqlite", "sqlite3", "db", "db3"] }],
+  });
+  if (typeof path === "string") {
+    form.database = path;
+    try { await api.rememberFile(path); } catch { /* non-sandbox build: no-op */ }
+  }
+}
 
 // Validate before we bother the network, so a blank host doesn't turn into
 // DNS gibberish from the driver. Server engines need a host + a valid port;
@@ -113,8 +128,12 @@ async function save() {
       <input v-model="form.database" :placeholder="form.engine === 'redis' ? 'DB index (0)' : 'Database'"
         class="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5" />
     </template>
-    <input v-else v-model="form.database" placeholder="/path/to/database.sqlite"
-      class="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5" />
+    <div v-else class="flex gap-2">
+      <input v-model="form.database" placeholder="/path/to/database.sqlite"
+        class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5" />
+      <button type="button" @click="browseSqlite"
+        class="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-sm">Browse…</button>
+    </div>
 
     <template v-if="!isFile()">
       <label class="flex items-center gap-2 text-xs text-zinc-400 pt-1">

@@ -196,6 +196,7 @@ export const api = {
   setRedisValue: (id: string, key: string, value: RedisValue) =>
     invoke<void>("set_redis_value", { id, key, value }),
   deleteRedisKey: (id: string, key: string) => invoke<void>("delete_redis_key", { id, key }),
+  rememberFile: (path: string) => invoke<void>("remember_file", { path }),
   redisSelectDb: (id: string, db: number) => invoke<void>("redis_select_db", { id, db }),
   setRedisTtl: (id: string, key: string, ttlSecs: number) =>
     invoke<void>("set_redis_ttl", { id, key, ttlSecs }),

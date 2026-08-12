@@ -123,13 +123,19 @@ Everything network — MySQL, Postgres, SQL Server, Redis, and **SSH tunnels** �
 sandbox with the entitlements provided (`network.client` + `network.server`). The things to test
 in the sandboxed build before submitting:
 
-1. **SQLite files — the main risk.** Under the sandbox the app can only touch files the user
-   picks through the system dialog. Tabula saves a SQLite connection by **path** and reopens it
-   on the next launch — which the sandbox will **deny** unless we persist access with a
-   *security-scoped bookmark*. Network connections are unaffected; this is SQLite-only.
-   **If you want SQLite connections to survive a restart on the App Store build, I need to add
-   security-scoped-bookmark handling (likely via `tauri-plugin-persisted-scope`) — tell me and
-   I'll implement it, then we verify on your signed build.**
+1. **SQLite files — handled, verify on your signed build.** Under the sandbox the app can only
+   touch files the user picks through the system dialog; a typed path grants nothing, and a saved
+   connection reopened by path on the next launch would be denied. This is now addressed:
+   - The connection form uses a **Browse…** picker for SQLite (the dialog is what grants access).
+   - `tauri-plugin-fs` + `tauri-plugin-persisted-scope` are registered, and picking a file calls
+     `remember_file`, which adds it to the fs scope so persisted-scope stores a macOS
+     **security-scoped bookmark** and restores access on the next launch.
+
+   Because this can only be exercised in a real sandboxed (signed) build, **verify on your first
+   App Store build**: create a SQLite connection via Browse…, quit, relaunch, and confirm it
+   reconnects. If it doesn't, the fallback is direct security-scoped bookmarks stored per
+   connection — tell me and I'll switch to that. (Network engines are unaffected either way.)
+   Existing SQLite connections created by *typing* a path must be re-picked with Browse… once.
 
 2. **Keychain (saved passwords).** The `keyring` crate uses the macOS Keychain; under the
    sandbox items live in the app's own keychain group. Verify saving/loading a connection

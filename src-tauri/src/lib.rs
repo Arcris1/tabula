@@ -45,6 +45,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        // must be registered AFTER fs so it can save/restore the fs scope
+        .plugin(tauri_plugin_persisted_scope::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -93,6 +96,7 @@ pub fn run() {
             commands::get_redis_value,
             commands::build_key_tree,
             commands::write_text_file,
+            commands::remember_file,
             commands::schema_columns,
             commands::run_query,
             commands::cancel_query,

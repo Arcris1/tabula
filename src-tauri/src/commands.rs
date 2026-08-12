@@ -409,6 +409,17 @@ pub fn write_text_file(path: String, contents: String) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Grant (and, via persisted-scope, remember across relaunch) access to a
+/// user-picked file — used for SQLite databases so a saved SQLite connection
+/// keeps working under the Mac App Store sandbox. No-op-safe on non-sandbox builds.
+#[tauri::command]
+pub fn remember_file(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
+    use tauri_plugin_fs::FsExt;
+    app.fs_scope()
+        .allow_file(&path)
+        .map_err(|e| AppError::internal(e.to_string()))
+}
+
 #[tauri::command]
 pub fn build_key_tree(keys: Vec<String>) -> Vec<KeyTreeNode> {
     keytree::build(&keys)
