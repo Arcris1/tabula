@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  App Store sandbox entitlements for Tabula.
+  The Mac App Store REQUIRES the app sandbox. These declare the minimum Tabula needs:
+    - network.client : outbound connections to MySQL/Postgres/MSSQL/Redis and SSH.
+    - network.server : the SSH tunnel binds a local 127.0.0.1 listener that the DB
+                       driver then connects to (local port-forward).
+    - files.user-selected.read-write : open SQLite files and write CSV/JSON exports
+                       that the user picks through the system file dialog.
+  NOTE: this ONLY applies to the App Store build (via tauri.appstore.conf.json).
+  Your normal dev / Developer-ID build is unaffected.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

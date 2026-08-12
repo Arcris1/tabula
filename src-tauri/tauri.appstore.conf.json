@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "//": "App Store overrides. Use with: npm run tauri build -- --config src-tauri/tauri.appstore.conf.json --bundles app",
+  "//2": "EDIT the two placeholders below with YOUR Apple signing identity and Team ID before building.",
+  "bundle": {
+    "category": "DeveloperTool",
+    "macOS": {
+      "entitlements": "entitlements.appstore.plist",
+      "signingIdentity": "Apple Distribution: YOUR NAME (YOURTEAMID)",
+      "providerShortName": "YOURTEAMID"
+    }
+  }
+}
