@@ -583,28 +583,36 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       <button @click="cs.clear()" class="px-2 py-1 rounded text-zinc-400 hover:bg-zinc-800">Discard</button>
     </div>
 
-    <footer class="relative h-7 shrink-0 flex items-center gap-3 px-3 border-t border-zinc-800 text-[11px] text-zinc-500">
+    <!-- results toolbar: same layout as the table browser's middle bar
+         (+ Row left · centered count · Filters/Columns/Copy-Export cluster right) -->
+    <footer class="relative h-8 shrink-0 flex items-center gap-2 px-3 border-t border-zinc-800 text-[11px] text-zinc-400">
       <template v-if="run?.status === 'done' && run.columns.length">
-        <span v-if="selectedRow !== null">row {{ selectedRow + 1 }} selected</span>
-        <span v-else-if="resFilterCount">{{ displayRows.length.toLocaleString() }} of {{ run.rowCount?.toLocaleString() }} rows</span>
-        <span v-else>{{ run.rowCount?.toLocaleString() }} rows</span>
-        <span>{{ run.elapsedMs }} ms</span>
+        <button v-if="canEdit" @click="cs.addDraft(colNames)"
+          class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800">+ Row</button>
         <span v-if="canEdit" class="text-emerald-400">editable</span>
-        <span v-else-if="readOnlyReason" class="text-zinc-600">{{ readOnlyReason }}</span>
-        <button @click="showResFilters = !showResFilters"
-          class="ml-auto px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
-          :class="showResFilters || resFilterCount ? 'text-blue-400' : ''">
-          Filters<template v-if="resFilterCount"> ({{ resFilterCount }})</template>
-        </button>
-        <button @click="showResCols = !showResCols"
-          class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
-          :class="showResCols || hiddenResCols.size ? 'text-blue-400' : ''">Columns</button>
-        <ResultActions :columns="colNames" :rows="displayRows"
-          :selected="selectedRow !== null ? displayRows[selectedRow] : null" :table="editTable?.name" />
-        <button v-if="canEdit" @click="cs.addDraft(colNames)" class="text-blue-400 hover:text-blue-300">+ Row</button>
+        <span v-else-if="readOnlyReason" class="text-zinc-600 truncate max-w-[16rem]" :title="readOnlyReason">{{ readOnlyReason }}</span>
+        <span class="text-zinc-500">{{ run.elapsedMs }} ms</span>
+        <!-- centered row count / selection -->
+        <span class="absolute left-1/2 -translate-x-1/2 text-zinc-500">
+          <template v-if="selectedRow !== null">row {{ selectedRow + 1 }} selected</template>
+          <template v-else-if="resFilterCount">{{ displayRows.length.toLocaleString() }} of {{ run.rowCount?.toLocaleString() }} rows</template>
+          <template v-else>{{ run.rowCount?.toLocaleString() }} rows</template>
+        </span>
+        <div class="ml-auto flex items-center gap-2">
+          <button @click="showResFilters = !showResFilters"
+            class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
+            :class="showResFilters || resFilterCount ? 'text-blue-400' : ''">
+            Filters<template v-if="resFilterCount"> ({{ resFilterCount }})</template>
+          </button>
+          <button @click="showResCols = !showResCols"
+            class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
+            :class="showResCols || hiddenResCols.size ? 'text-blue-400' : ''">Columns</button>
+          <ResultActions :columns="colNames" :rows="displayRows"
+            :selected="selectedRow !== null ? displayRows[selectedRow] : null" :table="editTable?.name" />
+        </div>
       </template>
-      <span v-else-if="run?.status === 'done'">{{ run.elapsedMs }} ms</span>
-      <span v-else-if="run?.status === 'running'">{{ run.rows.length }} rows so far…</span>
+      <span v-else-if="run?.status === 'done'" class="text-zinc-500">{{ run.elapsedMs }} ms</span>
+      <span v-else-if="run?.status === 'running'" class="text-zinc-500">{{ run.rows.length }} rows so far…</span>
 
       <!-- Columns show/hide picker -->
       <div v-if="showResCols" class="absolute bottom-8 right-3 z-40 w-56 max-h-72 overflow-auto rounded border border-zinc-700 bg-zinc-900 py-1 shadow-lg text-zinc-300"
