@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { EditorView, keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
@@ -7,7 +7,7 @@ import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
 import { sql, MSSQL, MySQL, PostgreSQL, SQLite } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { api, type TableInfo } from "../lib/api";
+import { api, type FilterOp, type TableInfo } from "../lib/api";
 import { statementAt, statements } from "../lib/sqlStatement";
 import { createChangeset } from "../lib/changesetCore";
 import { parseCellInput } from "../lib/cellInput";
@@ -90,8 +90,47 @@ let columnsByTable: Record<string, string[]> = {};
 
 const run = computed(() => props.tab.runs[props.tab.activeRunIndex] ?? null);
 const running = computed(() => props.tab.runs.some((r) => r.status === "running"));
-const range = computed(() => visibleRange(scrollTop.value, viewportH.value, ROW_H, run.value?.rows.length ?? 0));
-const slice = computed(() => run.value?.rows.slice(range.value.start, range.value.end) ?? []);
+
+// ---- client-side filter + column show/hide over the in-memory result ----
+// (a raw query is arbitrary SQL, so filtering is applied to the loaded rows here
+//  rather than re-run server-side like the table browser does)
+const showResFilters = ref(false);
+const showResCols = ref(false);
+const resFilterOps = reactive<Record<string, FilterOp>>({});
+const resFilterVals = reactive<Record<string, string>>({});
+const hiddenResCols = reactive(new Set<string>());
+function resetResultView() {
+  showResFilters.value = false; showResCols.value = false;
+  for (const k of Object.keys(resFilterOps)) delete resFilterOps[k];
+  for (const k of Object.keys(resFilterVals)) delete resFilterVals[k];
+  hiddenResCols.clear();
+}
+function activeFilter(name: string) {
+  const op = resFilterOps[name];
+  if (op === "isNull" || op === "notNull") return { op } as const;
+  const val = (resFilterVals[name] ?? "").trim();
+  return val ? ({ op: op ?? "contains", val } as const) : null;
+}
+const resFilterCount = computed(() =>
+  (run.value?.columns ?? []).filter((c) => activeFilter(c.name)).length);
+const displayRows = computed(() => {
+  const r = run.value;
+  if (!r) return [] as unknown[][];
+  if (!resFilterCount.value) return r.rows;
+  const active = r.columns
+    .map((c, idx) => ({ idx, f: activeFilter(c.name) }))
+    .filter((x) => x.f) as { idx: number; f: { op: FilterOp; val?: string } }[];
+  return r.rows.filter((row) => active.every(({ idx, f }) => {
+    const cell = row[idx];
+    if (f.op === "isNull") return cell === null;
+    if (f.op === "notNull") return cell !== null;
+    const s = (cell === null ? "" : String(cell)).toLowerCase();
+    const q = (f.val ?? "").toLowerCase();
+    return f.op === "equals" ? s === q : s.includes(q);
+  }));
+});
+const range = computed(() => visibleRange(scrollTop.value, viewportH.value, ROW_H, displayRows.value.length));
+const slice = computed(() => displayRows.value.slice(range.value.start, range.value.end));
 
 function dialectFor() {
   const engine = conns.connections.find((c) => c.id === ws.activeId)?.engine;
@@ -266,7 +305,7 @@ function openJson(value: unknown, title: string) {
   if (parsed !== null) jsonView.value = { value: parsed, title };
 }
 const inspectorRow = computed(() =>
-  selectedRow.value !== null ? run.value?.rows[selectedRow.value] ?? null : null,
+  selectedRow.value !== null ? displayRows.value[selectedRow.value] ?? null : null,
 );
 function inspectorCell(column: string) {
   return cs.cellValue(inspectorRow.value!, colNames.value, column);
@@ -293,6 +332,7 @@ watch([() => props.tab.activeRunIndex, () => run.value?.status, () => run.value?
   editingCell.value = null;
   selectedRow.value = null;
   commitError.value = null;
+  resetResultView();
   const r = run.value;
   if (!r || r.status !== "done" || !r.columns.length || !ws.activeId) return;
   const target = editableTarget(r.sql, { hashComments: isMysql() });
@@ -330,7 +370,7 @@ watch([() => props.tab.activeRunIndex, () => run.value?.status, () => run.value?
 
 function beginCellEdit(rowIndex: number, column: string) {
   if (!canEdit.value || !run.value) return;
-  const row = run.value.rows[rowIndex];
+  const row = displayRows.value[rowIndex];
   const { value } = cs.cellValue(row, colNames.value, column);
   editValue.value = value === null ? "NULL" : cellText(value);
   editingCell.value = { rowIndex, column };
@@ -339,7 +379,7 @@ function beginCellEdit(rowIndex: number, column: string) {
 function commitCellEdit() {
   if (!editingCell.value || !run.value) return;
   const { rowIndex, column } = editingCell.value;
-  const row = run.value.rows[rowIndex];
+  const row = displayRows.value[rowIndex];
   const original = row[colNames.value.indexOf(column)];
   cs.editCell(row, colNames.value, column, parseCellInput(editValue.value, original));
   editingCell.value = null;
@@ -442,9 +482,26 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
         <thead class="sticky top-0 bg-zinc-950 z-10">
           <tr>
             <th v-if="canEdit" class="w-6 border-b border-zinc-800"></th>
-            <th v-for="c in run.columns" :key="c.name"
+            <th v-for="c in run.columns" :key="c.name" v-show="!hiddenResCols.has(c.name)"
               class="text-left px-2 py-1 border-b border-zinc-800 font-medium text-zinc-400 whitespace-nowrap">
               {{ c.name }}
+            </th>
+          </tr>
+          <tr v-if="showResFilters">
+            <th v-if="canEdit" class="border-b border-zinc-800"></th>
+            <th v-for="c in run.columns" :key="'f' + c.name" v-show="!hiddenResCols.has(c.name)" class="px-1 pb-1 border-b border-zinc-800">
+              <div class="flex gap-0.5">
+                <select v-model="resFilterOps[c.name]" title="Filter operator" aria-label="Filter operator"
+                  class="bg-zinc-900 border border-zinc-800 rounded text-[10px] font-sans text-zinc-400 outline-none w-20">
+                  <option value="contains">contains</option>
+                  <option value="equals">equals</option>
+                  <option value="isNull">is null</option>
+                  <option value="notNull">not null</option>
+                </select>
+                <input v-model="resFilterVals[c.name]" placeholder="filter…"
+                  :disabled="resFilterOps[c.name] === 'isNull' || resFilterOps[c.name] === 'notNull'"
+                  class="w-full min-w-16 bg-zinc-900 border border-zinc-800 rounded px-1 py-0.5 text-[11px] font-sans outline-none focus:border-zinc-600 disabled:opacity-40" />
+              </div>
             </th>
           </tr>
         </thead>
@@ -454,7 +511,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
             <td class="text-center border-b border-zinc-900">
               <button class="text-red-500/70 hover:text-red-400" @click="cs.removeDraft(di)">×</button>
             </td>
-            <td v-for="c in run.columns" :key="c.name" class="border-b border-zinc-900 px-1">
+            <td v-for="c in run.columns" :key="c.name" v-show="!hiddenResCols.has(c.name)" class="border-b border-zinc-900 px-1">
               <input v-model="(d[c.name] as any)" :placeholder="c.name"
                 class="w-full bg-transparent border border-zinc-800 rounded px-1 py-0.5 text-[11px] outline-none focus:border-green-700" />
             </td>
@@ -473,7 +530,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
                 :class="cs.isDeleted(r, colNames) ? 'text-red-400' : ''"
                 @click="cs.markDelete(r, colNames)">×</button>
             </td>
-            <td v-for="(v, j) in r" :key="j"
+            <td v-for="(v, j) in r" :key="j" v-show="!hiddenResCols.has(run.columns[j]?.name)"
               class="px-2 border-b border-zinc-900 whitespace-nowrap max-w-96 overflow-hidden text-ellipsis"
               @dblclick="beginCellEdit(range.start + i, run.columns[j].name)">
               <input v-if="editingCell && editingCell.rowIndex === range.start + i && editingCell.column === run.columns[j].name"
@@ -494,8 +551,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
               </template>
             </td>
           </tr>
-          <tr :style="{ height: `${((run?.rows.length ?? 0) - range.end) * ROW_H}px` }"
-            v-if="run && range.end < run.rows.length" />
+          <tr :style="{ height: `${(displayRows.length - range.end) * ROW_H}px` }"
+            v-if="range.end < displayRows.length" />
         </tbody>
       </table>
       <div v-else-if="run?.status === 'done'" class="p-3 text-xs text-zinc-500">
@@ -526,18 +583,43 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       <button @click="cs.clear()" class="px-2 py-1 rounded text-zinc-400 hover:bg-zinc-800">Discard</button>
     </div>
 
-    <footer class="h-7 shrink-0 flex items-center gap-3 px-3 border-t border-zinc-800 text-[11px] text-zinc-500">
-      <template v-if="run?.status === 'done'">
+    <footer class="relative h-7 shrink-0 flex items-center gap-3 px-3 border-t border-zinc-800 text-[11px] text-zinc-500">
+      <template v-if="run?.status === 'done' && run.columns.length">
         <span v-if="selectedRow !== null">row {{ selectedRow + 1 }} selected</span>
-        <span v-else>{{ run.rowCount }} rows</span>
+        <span v-else-if="resFilterCount">{{ displayRows.length.toLocaleString() }} of {{ run.rowCount?.toLocaleString() }} rows</span>
+        <span v-else>{{ run.rowCount?.toLocaleString() }} rows</span>
         <span>{{ run.elapsedMs }} ms</span>
         <span v-if="canEdit" class="text-emerald-400">editable</span>
         <span v-else-if="readOnlyReason" class="text-zinc-600">{{ readOnlyReason }}</span>
-        <ResultActions class="ml-auto" :columns="colNames" :rows="run.rows"
-          :selected="selectedRow !== null ? run.rows[selectedRow] : null" :table="editTable?.name" />
+        <button @click="showResFilters = !showResFilters"
+          class="ml-auto px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
+          :class="showResFilters || resFilterCount ? 'text-blue-400' : ''">
+          Filters<template v-if="resFilterCount"> ({{ resFilterCount }})</template>
+        </button>
+        <button @click="showResCols = !showResCols"
+          class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800"
+          :class="showResCols || hiddenResCols.size ? 'text-blue-400' : ''">Columns</button>
+        <ResultActions :columns="colNames" :rows="displayRows"
+          :selected="selectedRow !== null ? displayRows[selectedRow] : null" :table="editTable?.name" />
         <button v-if="canEdit" @click="cs.addDraft(colNames)" class="text-blue-400 hover:text-blue-300">+ Row</button>
       </template>
+      <span v-else-if="run?.status === 'done'">{{ run.elapsedMs }} ms</span>
       <span v-else-if="run?.status === 'running'">{{ run.rows.length }} rows so far…</span>
+
+      <!-- Columns show/hide picker -->
+      <div v-if="showResCols" class="absolute bottom-8 right-3 z-40 w-56 max-h-72 overflow-auto rounded border border-zinc-700 bg-zinc-900 py-1 shadow-lg text-zinc-300"
+        @mouseleave="showResCols = false">
+        <div class="px-3 py-1 text-[10px] uppercase tracking-wide text-zinc-500 flex items-center">
+          Columns
+          <button class="ml-auto text-blue-400 hover:text-blue-300" @click="hiddenResCols.clear()">show all</button>
+        </div>
+        <label v-for="c in run?.columns ?? []" :key="c.name"
+          class="flex items-center gap-2 px-3 py-1 hover:bg-zinc-800 cursor-pointer">
+          <input type="checkbox" :checked="!hiddenResCols.has(c.name)"
+            @change="hiddenResCols.has(c.name) ? hiddenResCols.delete(c.name) : hiddenResCols.add(c.name)" />
+          <span class="truncate">{{ c.name }}</span>
+        </label>
+      </div>
     </footer>
 
     <JsonViewer v-if="jsonView" :value="jsonView.value" :title="jsonView.title" @close="jsonView = null" />
