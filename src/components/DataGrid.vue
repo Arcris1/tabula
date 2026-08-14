@@ -10,6 +10,7 @@ import { useConnectionsStore } from "../stores/connections";
 import { usePanelsStore } from "../stores/panels";
 import { useSettingsStore } from "../stores/settings";
 import { useShortcutsStore } from "../stores/shortcuts";
+import { useToastStore } from "../stores/toast";
 import { useWorkspaceStore } from "../stores/workspace";
 import ConfirmModal from "./ConfirmModal.vue";
 import JsonViewer from "./JsonViewer.vue";
@@ -23,6 +24,7 @@ const ws = useWorkspaceStore();
 const conns = useConnectionsStore();
 const cs = useChangesetStore();
 const panels = usePanelsStore();
+const toast = useToastStore();
 const PAGE = 300;
 const ROW_H = 28;
 
@@ -298,9 +300,11 @@ async function commit(skipProdCheck = false) {
   confirmProd.value = false;
   conflictError.value = null;
   try {
-    await api.applyChangeset(ws.activeId, ws.selectedTable, cs.toChangeset());
+    const n = cs.count;
+    const r = await api.applyChangeset(ws.activeId, ws.selectedTable, cs.toChangeset());
     cs.clear();
     load(true);
+    toast.success(`Committed ${(r.updated + r.inserted + r.deleted) || n} change(s)`);
   } catch (e: any) {
     conflictError.value = e?.message ?? String(e);
   }
@@ -337,16 +341,18 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
       read-only: table has no primary key
     </div>
 
-    <div ref="scroller" tabindex="0" class="flex-1 overflow-auto font-mono text-[12px] outline-none" @scroll="onScroll" @keydown="onGridKeydown">
+    <div ref="scroller" tabindex="0" class="flex-1 overflow-auto font-mono text-[12px] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/60" @scroll="onScroll" @keydown="onGridKeydown">
       <table class="border-collapse min-w-full">
         <thead class="sticky top-0 bg-zinc-950 z-10">
           <tr>
             <th class="w-6 border-b border-zinc-800"></th>
             <th v-for="x in visibleCols" :key="x.c.name"
-              class="text-left px-2 py-1 border-b border-zinc-800 font-medium text-zinc-400 cursor-pointer select-none whitespace-nowrap"
-              @click="toggleSort(x.c.name)">
-              {{ x.c.name }}
-              <span v-if="sort?.column === x.c.name">{{ sort.desc ? "↓" : "↑" }}</span>
+              class="text-left border-b border-zinc-800 font-medium text-zinc-400 whitespace-nowrap">
+              <button type="button" class="w-full text-left px-2 py-1 flex items-center gap-1 hover:text-zinc-200 select-none"
+                :title="`Sort by ${x.c.name}`" @click="toggleSort(x.c.name)">
+                {{ x.c.name }}
+                <span v-if="sort?.column === x.c.name" aria-hidden="true">{{ sort.desc ? "↓" : "↑" }}</span>
+              </button>
             </th>
           </tr>
           <tr v-if="showFilters">
@@ -407,8 +413,8 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
                 <span v-if="cs.cellValue(r, columnNames, x.c.name).dirty" class="text-amber-300">
                   {{ cs.cellValue(r, columnNames, x.c.name).value === null ? "NULL" : cellText(cs.cellValue(r, columnNames, x.c.name).value) }}
                 </span>
-                <span v-else-if="r[x.i] === null" class="text-zinc-600 italic">NULL</span>
-                <span v-else-if="r[x.i] === ''" class="text-zinc-700 italic" title="empty string">''</span>
+                <span v-else-if="r[x.i] === null" class="inline-block rounded px-1 text-[10px] font-medium tracking-wide text-zinc-400 bg-zinc-800/80" title="NULL">NULL</span>
+                <span v-else-if="r[x.i] === ''" class="inline-block rounded px-1 text-[10px] text-zinc-400 bg-zinc-800/80" title="empty string">EMPTY</span>
                 <template v-else-if="asJson(r[x.i]) !== null">
                   <button class="mr-1 text-[9px] px-1 rounded bg-zinc-800 text-sky-300 hover:bg-zinc-700"
                     @click.stop="openJson(r[x.i], x.c.name)" title="View JSON">{}</button>{{ cellText(r[x.i]) }}
@@ -417,7 +423,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
                   class="text-sky-400 hover:text-sky-300 hover:underline"
                   :title="`Go to ${fkMap[x.c.name].table}.${fkMap[x.c.name].column} = ${cellText(r[x.i])}`"
                   @click.stop="followFk(x.c.name, r[x.i])">{{ cellText(r[x.i]) }} ↗</button>
-                <span v-else>{{ cellText(r[x.i]) }}</span>
+                <span v-else :title="cellText(r[x.i])">{{ cellText(r[x.i]) }}</span>
               </template>
             </td>
           </tr>
@@ -437,7 +443,7 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
         class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800">+ Row</button>
       <!-- centered row count / selection -->
       <span class="absolute left-1/2 -translate-x-1/2 text-zinc-500">
-        <template v-if="selectedRow !== null">1 of {{ rows.length }} rows selected</template>
+        <template v-if="selectedRow !== null">row {{ selectedRow + 1 }} selected</template>
         <template v-else>{{ rangeLabel }} rows</template>
       </span>
       <div class="ml-auto flex items-center gap-2">

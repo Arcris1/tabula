@@ -55,7 +55,7 @@ const fields = computed(() =>
           class="w-full mt-0.5 bg-zinc-900 border rounded px-1.5 py-1 text-[12px] font-mono outline-none focus:border-zinc-500 disabled:opacity-60"
           :class="[
             f.dirty ? 'border-amber-700 text-amber-300' : 'border-zinc-800',
-            f.isNull && !f.dirty ? 'text-zinc-600 italic' : '',
+            f.isNull && !f.dirty ? 'text-zinc-400 italic' : '',
           ]" />
       </div>
       <div v-if="!editable" class="text-[10px] text-zinc-600 mt-1">

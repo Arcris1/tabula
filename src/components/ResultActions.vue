@@ -59,7 +59,7 @@ const tbl = () => props.table ?? "table";
 <template>
   <div class="relative inline-block">
     <button @click="open = !open" class="px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800">Copy / Export ▾</button>
-    <span v-if="note" class="ml-2 text-green-500">{{ note }}</span>
+    <span v-if="note" class="ml-2 text-emerald-400">{{ note }}</span>
     <div v-if="open" class="absolute bottom-7 right-0 z-40 w-52 rounded border border-zinc-700 bg-zinc-900 py-1 shadow-lg text-[12px]"
       @mouseleave="open = false">
       <template v-if="selected">

@@ -11,6 +11,7 @@ import RedisValuePane from "./components/RedisValuePane.vue";
 import SchemaSidebar from "./components/SchemaSidebar.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import ShortcutHelpModal from "./components/ShortcutHelpModal.vue";
+import ToastHost from "./components/ToastHost.vue";
 import DatabasesView from "./components/DatabasesView.vue";
 import StructureView from "./components/StructureView.vue";
 import { api, type RedisEntry } from "./lib/api";
@@ -32,7 +33,7 @@ const savedQueries = useSavedQueriesStore();
 const panels = usePanelsStore();
 const active = computed(() => conns.connections.find((c) => c.id === ws.activeId));
 const colorClass: Record<string, string> = {
-  gray: "bg-zinc-500", blue: "bg-blue-500", green: "bg-green-500",
+  gray: "bg-zinc-500", blue: "bg-blue-500", green: "bg-emerald-500",
   amber: "bg-amber-500", red: "bg-red-500",
 };
 
@@ -401,10 +402,10 @@ onBeforeUnmount(() => {
       @databases="appMode = 'dbs'" />
     <template v-else>
       <header class="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800">
-        <button @click="showSettings = true"
-          class="text-zinc-500 hover:text-zinc-200 text-sm leading-none" title="Settings (⌘,)">⚙</button>
-        <button @click="showHelp = true"
-          class="text-zinc-500 hover:text-zinc-200 text-sm leading-none w-4 h-4 rounded-full border border-zinc-700 flex items-center justify-center"
+        <button @click="showSettings = true" aria-label="Settings"
+          class="w-6 h-6 flex items-center justify-center rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-sm" title="Settings (⌘,)">⚙</button>
+        <button @click="showHelp = true" aria-label="Keyboard shortcuts"
+          class="w-6 h-6 flex items-center justify-center rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-sm"
           title="Keyboard shortcuts (⌘⇧/)">?</button>
         <div class="w-px h-4 bg-zinc-800 mx-1"></div>
         <span v-if="active?.isProduction" class="text-[10px] uppercase tracking-wide text-red-400 border border-red-900 rounded px-1">prod</span>
@@ -433,7 +434,7 @@ onBeforeUnmount(() => {
           {{ connMeta(c.id)?.name ?? c.id }}
           <span class="text-[9px] uppercase text-zinc-500">{{ connMeta(c.id)?.engine }}</span>
           <span v-if="c.health === 'dead'" class="text-[9px] uppercase text-red-400">offline</span>
-          <span class="text-zinc-600 hover:text-red-400" @click.stop="requestCloseConn(c.id)">×</span>
+          <button type="button" class="ml-0.5 px-1 rounded text-zinc-500 hover:text-red-400 hover:bg-zinc-800" title="Disconnect" aria-label="Disconnect" @click.stop="requestCloseConn(c.id)">×</button>
         </button>
         <button @click="showLauncher = true" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-900"
           title="Open another connection">+</button>
@@ -451,7 +452,7 @@ onBeforeUnmount(() => {
               :class="(mainTab === 'data' || mainTab === 'structure') && ws.selectedTable && ws.tableKey(ws.selectedTable) === ws.tableKey(t)
                 ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:bg-zinc-900'">
               {{ t.name }}
-              <span class="text-zinc-600 hover:text-red-400" @click.stop="ws.closeTable(t)">×</span>
+              <button type="button" class="ml-0.5 px-1 rounded text-zinc-500 hover:text-red-400 hover:bg-zinc-800" title="Close table" aria-label="Close table" @click.stop="ws.closeTable(t)">×</button>
             </button>
             <button v-for="t in activeQueryTabs" :key="t.id" @click="mainTab = t.id"
               class="px-2 py-1 rounded flex items-center gap-1"
@@ -460,7 +461,7 @@ onBeforeUnmount(() => {
               <span v-if="t.txOpen"
                 class="text-[9px] font-semibold uppercase text-amber-400 border border-amber-800 rounded px-1"
                 title="Open transaction — COMMIT or ROLLBACK to finish">TX</span>
-              <span class="text-zinc-600 hover:text-red-400" @click.stop="closeQueryTab(t.id)">×</span>
+              <button type="button" class="ml-0.5 px-1 rounded text-zinc-500 hover:text-red-400 hover:bg-zinc-800" title="Close tab" aria-label="Close tab" @click.stop="closeQueryTab(t.id)">×</button>
             </button>
             <button @click="newQueryTab" class="px-2 py-1 rounded text-zinc-500 hover:bg-zinc-900">+</button>
             <button @click="showSaved = !showSaved; if (showSaved) showHistory = false"
@@ -509,5 +510,6 @@ onBeforeUnmount(() => {
     <OverrideSavedModal v-if="overridePick" :name="overridePick.name"
       @new-tab="confirmOverride('newTab')" @override="confirmOverride('override')" @cancel="overridePick = null" />
     </template>
+    <ToastHost />
   </main>
 </template>

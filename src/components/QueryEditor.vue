@@ -19,6 +19,7 @@ import { useQueriesStore, type QueryTab } from "../stores/queries";
 import { usePanelsStore } from "../stores/panels";
 import { useSettingsStore } from "../stores/settings";
 import { useSavedQueriesStore } from "../stores/savedQueries";
+import { useToastStore } from "../stores/toast";
 import { useShortcutsStore } from "../stores/shortcuts";
 import { useWorkspaceStore } from "../stores/workspace";
 import { asJson } from "../lib/jsonCell";
@@ -34,6 +35,7 @@ import SqlPreviewModal from "./SqlPreviewModal.vue";
 const props = defineProps<{ tab: QueryTab }>();
 const queries = useQueriesStore();
 const savedQueries = useSavedQueriesStore();
+const toast = useToastStore();
 const savePromptOpen = ref(false);
 const saveInitial = ref("");
 const pendingSql = ref("");
@@ -49,6 +51,7 @@ function saveCurrent() {
 function doSave(name: string, sql: string) {
   savedQueries.save(name, sql);
   props.tab.title = name; // rename the tab to match the saved query
+  toast.success(`Saved “${name}”`);
 }
 function confirmSave(name: string) {
   savePromptOpen.value = false;
@@ -481,13 +484,13 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
                 <span v-if="canEdit && cs.cellValue(r, colNames, run.columns[j].name).dirty" class="text-amber-300">
                   {{ cs.cellValue(r, colNames, run.columns[j].name).value === null ? "NULL" : cellText(cs.cellValue(r, colNames, run.columns[j].name).value) }}
                 </span>
-                <span v-else-if="v === null" class="text-zinc-600 italic">NULL</span>
-                <span v-else-if="v === ''" class="text-zinc-700 italic" title="empty string">''</span>
+                <span v-else-if="v === null" class="inline-block rounded px-1 text-[10px] font-medium tracking-wide text-zinc-400 bg-zinc-800/80" title="NULL">NULL</span>
+                <span v-else-if="v === ''" class="inline-block rounded px-1 text-[10px] text-zinc-400 bg-zinc-800/80" title="empty string">EMPTY</span>
                 <template v-else-if="asJson(v) !== null">
                   <button class="mr-1 text-[9px] px-1 rounded bg-zinc-800 text-sky-300 hover:bg-zinc-700"
                     @click.stop="openJson(v, run.columns[j].name)" title="View JSON">{}</button>{{ cellText(v) }}
                 </template>
-                <span v-else>{{ cellText(v) }}</span>
+                <span v-else :title="cellText(v)">{{ cellText(v) }}</span>
               </template>
             </td>
           </tr>
@@ -525,10 +528,10 @@ onBeforeUnmount(() => unregisters.forEach((u) => u()));
 
     <footer class="h-7 shrink-0 flex items-center gap-3 px-3 border-t border-zinc-800 text-[11px] text-zinc-500">
       <template v-if="run?.status === 'done'">
-        <span v-if="selectedRow !== null">1 of {{ run.rows.length }} rows selected</span>
+        <span v-if="selectedRow !== null">row {{ selectedRow + 1 }} selected</span>
         <span v-else>{{ run.rowCount }} rows</span>
         <span>{{ run.elapsedMs }} ms</span>
-        <span v-if="canEdit" class="text-green-600">editable</span>
+        <span v-if="canEdit" class="text-emerald-400">editable</span>
         <span v-else-if="readOnlyReason" class="text-zinc-600">{{ readOnlyReason }}</span>
         <ResultActions class="ml-auto" :columns="colNames" :rows="run.rows"
           :selected="selectedRow !== null ? run.rows[selectedRow] : null" :table="editTable?.name" />

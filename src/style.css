@@ -12,3 +12,22 @@ body {
   @apply bg-zinc-950 text-zinc-200 text-[13px] antialiased;
   font-family: -apple-system, "SF Pro Text", Inter, sans-serif;
 }
+
+/* Keyboard focus: many controls set outline-none for the mouse; restore a clear
+   ring for keyboard users (WCAG 2.4.7 / 2.4.11). Only shows on keyboard focus. */
+:focus-visible {
+  outline: 2px solid #3b82f6; /* blue-500 */
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+/* mouse clicks shouldn't paint the ring */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Placeholder contrast floor — never dimmer than zinc-500 (~#71717a) so field
+   hints stay legible on the dark inputs. */
+::placeholder {
+  color: #71717a;
+  opacity: 1;
+}

@@ -71,16 +71,22 @@ const previewSql = ref<string | null>(null);
 const confirmProd = ref(false);
 const dropColConfirm = ref<string | null>(null);
 
+const loading = ref(false);
 async function refresh() {
   error.value = null;
-  structure.value = null;
-  if (!ws.activeId || !ws.selectedTable) return;
+  if (!ws.activeId || !ws.selectedTable) { structure.value = null; return; }
+  // keep the current structure visible while refetching so re-selecting a table
+  // doesn't briefly flash the "Select a table" empty state
+  loading.value = true;
   try {
     structure.value = await api.tableStructure(ws.activeId, ws.selectedTable);
     const page = await api.fetchRows(ws.activeId, ws.selectedTable, { limit: 1, offset: 0, sort: null, filters: [] });
     estRows.value = page.totalEstimate ?? page.rows.length;
   } catch (e: any) {
+    structure.value = null;
     error.value = e?.message ?? String(e);
+  } finally {
+    loading.value = false;
   }
 }
 watch(() => ws.selectedTable, () => { creating.value = false; refresh(); }, { immediate: true });
@@ -210,8 +216,11 @@ onBeforeUnmount(unregisterRefresh);
       </div>
     </div>
 
-    <div v-if="!creating && !structure && !error" class="flex-1 flex items-center justify-center text-zinc-600 text-xs">
+    <div v-if="!creating && !structure && !error && !loading" class="flex-1 flex items-center justify-center text-zinc-500 text-xs">
       Select a table, or use “+ Table” to create one
+    </div>
+    <div v-else-if="!creating && !structure && loading" class="flex-1 flex items-center justify-center text-zinc-500 text-xs">
+      Loading structure…
     </div>
 
     <template v-if="!creating && structure">

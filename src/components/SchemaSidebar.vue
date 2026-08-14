@@ -8,6 +8,7 @@ import { useConnectionsStore } from "../stores/connections";
 import { usePinnedTablesStore } from "../stores/pinnedTables";
 import { useSettingsStore } from "../stores/settings";
 import { useShortcutsStore } from "../stores/shortcuts";
+import { useToastStore } from "../stores/toast";
 import { useWorkspaceStore } from "../stores/workspace";
 import ConfirmModal from "./ConfirmModal.vue";
 import DangerConfirmModal from "./DangerConfirmModal.vue";
@@ -34,6 +35,7 @@ const pendingOp = ref<DdlOp | null>(null);
 const confirmProd = ref(false);
 const dangerConfirm = ref<{ verb: string; table: string } | null>(null);
 const opError = ref<string | null>(null);
+const toast = useToastStore();
 
 function openMenu(e: MouseEvent, table: TableInfo) {
   menu.value = { x: e.clientX, y: e.clientY, table };
@@ -62,7 +64,7 @@ async function exportTable(t: TableInfo, format: "csv" | "json") {
   busy.value = `Exporting ${t.name}…`;
   try {
     const n = await api.exportTable(ws.activeId, t, format, path);
-    opError.value = `Exported ${n} rows to ${path}`;
+    toast.success(`Exported ${n.toLocaleString()} rows to ${path}`);
   } catch (e: any) {
     opError.value = e?.message ?? String(e);
   } finally {
@@ -79,7 +81,7 @@ async function importTable(t: TableInfo, format: "csv" | "json" | "sql") {
   busy.value = `Importing into ${t.name}…`;
   try {
     const r = await api.importTable(ws.activeId, t, format, path);
-    opError.value = `Imported ${r.inserted} ${format === "sql" ? "statement(s)" : "row(s)"} into ${t.name}`;
+    toast.success(`Imported ${r.inserted.toLocaleString()} ${format === "sql" ? "statement(s)" : "row(s)"} into ${t.name}`);
     if (ws.selectedTable && ws.tableKey(ws.selectedTable) === ws.tableKey(t)) ws.loadTables();
   } catch (e: any) {
     opError.value = e?.message ?? String(e);
@@ -236,20 +238,25 @@ async function toggleExpand(t: TableInfo) {
       </button>
       <ul v-show="showTables">
         <template v-for="t in filteredTables" :key="label(t)">
-        <li class="flex items-center px-1 py-1 rounded cursor-pointer text-[12.5px]"
+        <li class="flex items-center px-1 py-1 rounded text-[12.5px]"
           :class="ws.selectedTable === t ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:bg-zinc-900'"
-          @click="ws.selectTable(t)" @contextmenu.prevent="openMenu($event, t)">
-          <button class="w-3 text-zinc-600 hover:text-zinc-300 shrink-0"
+          @contextmenu.prevent="openMenu($event, t)">
+          <button class="w-4 text-zinc-500 hover:text-zinc-300 shrink-0"
+            :aria-label="expanded.has(ws.tableKey(t)) ? 'Collapse columns' : 'Expand columns'"
             @click.stop="toggleExpand(t)">{{ expanded.has(ws.tableKey(t)) ? "▾" : "▸" }}</button>
-          <span class="text-zinc-600 mr-1">{{ t.kind === "view" ? "◇" : "▤" }}</span>
-          <span class="truncate">{{ label(t) }}</span>
-          <span v-if="isPinned(t)" class="ml-auto text-amber-500 text-[10px] shrink-0">📌</span>
+          <button class="flex items-center min-w-0 flex-1 text-left" :title="label(t)" @click="ws.selectTable(t)">
+            <span class="text-zinc-500 mr-1" aria-hidden="true">{{ t.kind === "view" ? "◇" : "▤" }}</span>
+            <span class="truncate">{{ label(t) }}</span>
+          </button>
+          <span v-if="isPinned(t)" class="ml-auto text-amber-400 shrink-0" title="Pinned" aria-label="Pinned">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 4v6l3 3v2H7v-2l3-3V4H9V2h6v2z"/><path d="M11 15h2v7h-2z"/></svg>
+          </span>
         </li>
         <ul v-if="expanded.has(ws.tableKey(t))" class="ml-4">
           <li v-for="c in columnsByTable[ws.tableKey(t)] ?? []" :key="c.name"
-            class="flex items-center gap-1 px-2 py-0.5 text-[11.5px] text-zinc-500">
-            <span v-if="c.isPk" class="text-amber-500" title="primary key">🔑</span>
-            <span v-else class="w-3"></span>
+            class="flex items-center gap-1 px-2 py-0.5 text-[11.5px] text-zinc-400">
+            <span v-if="c.isPk" class="text-[9px] font-semibold text-amber-400 shrink-0" title="primary key">PK</span>
+            <span v-else class="w-4 shrink-0"></span>
             <span class="truncate">{{ c.name }}</span>
             <span class="ml-auto text-zinc-600 shrink-0">{{ c.dataType }}</span>
           </li>

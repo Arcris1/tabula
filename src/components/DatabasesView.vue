@@ -73,7 +73,7 @@ function fmtSize(bytes?: number | null): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 const colorClass: Record<string, string> = {
-  gray: "bg-zinc-500", blue: "bg-blue-500", green: "bg-green-500", amber: "bg-amber-500", red: "bg-red-500",
+  gray: "bg-zinc-500", blue: "bg-blue-500", green: "bg-emerald-500", amber: "bg-amber-500", red: "bg-red-500",
 };
 </script>
 
@@ -117,7 +117,7 @@ const colorClass: Record<string, string> = {
           <input v-model="newName" @keydown.enter="create" placeholder="New database name…"
             class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-600" />
           <button @click="create" :disabled="!newName.trim() || creating"
-            class="text-sm px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40">Create</button>
+            class="text-sm px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Create</button>
         </div>
 
         <!-- list -->
@@ -129,10 +129,10 @@ const colorClass: Record<string, string> = {
             <span class="text-zinc-500">▤</span>
             <span class="text-sm text-zinc-200 flex-1 truncate">{{ d.name }}</span>
             <span class="text-xs text-zinc-500 font-mono">{{ fmtSize(d.sizeBytes) }}</span>
-            <button @click.stop="selected && emit('open', selected.id, d.name)"
-              class="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white opacity-0 group-hover:opacity-100">Open ↗</button>
-            <button @click.stop="dropTarget = d.name"
-              class="text-xs px-2 py-1 rounded text-red-500/70 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100">Drop</button>
+            <button @click.stop="selected && emit('open', selected.id, d.name)" :aria-label="`Open ${d.name}`"
+              class="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white opacity-70 group-hover:opacity-100 focus-visible:opacity-100">Open ↗</button>
+            <button @click.stop="dropTarget = d.name" :aria-label="`Drop ${d.name}`"
+              class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-950/40 opacity-70 group-hover:opacity-100 focus-visible:opacity-100">Drop</button>
           </li>
           <li v-if="!dbs.length" class="px-3 py-4 text-xs text-zinc-600">No user databases.</li>
         </ul>

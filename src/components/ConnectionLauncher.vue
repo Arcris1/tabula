@@ -105,7 +105,7 @@ function onKeydown(e: KeyboardEvent) {
           <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600 text-sm pointer-events-none">⌕</span>
           <input ref="searchEl" v-model="filter" @keydown="onKeydown"
             placeholder="Search connections…"
-            class="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-2 text-sm outline-none focus:border-blue-600/70 placeholder:text-zinc-600" />
+            class="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-2 text-sm outline-none focus:border-blue-600/70 placeholder:text-zinc-500" />
         </div>
         <button @click="add"
           class="shrink-0 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium">+ New</button>
@@ -162,12 +162,18 @@ function onKeydown(e: KeyboardEvent) {
           <div v-else class="flex items-center gap-1 shrink-0">
             <span v-if="highlight === i" class="text-[11px] text-zinc-600 mr-1 hidden sm:inline">⏎</span>
             <button @click.stop="open(c)"
-              class="text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 opacity-0 group-hover:opacity-100"
+              class="text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               :class="{ 'opacity-100': highlight === i }">
               {{ busyId === c.id ? "…" : "Connect" }}
             </button>
-            <button @click.stop="edit(c)" class="text-xs px-1.5 py-1 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 opacity-0 group-hover:opacity-100" title="Edit">✎</button>
-            <button @click.stop="deletingId = c.id" class="text-xs px-1.5 py-1 rounded text-zinc-500 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100" title="Delete">🗑</button>
+            <button @click.stop="edit(c)" aria-label="Edit connection"
+              class="w-6 h-6 flex items-center justify-center rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              :class="{ 'opacity-100': highlight === i }" title="Edit">✎</button>
+            <button @click.stop="deletingId = c.id" aria-label="Delete connection"
+              class="w-6 h-6 flex items-center justify-center rounded text-zinc-400 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              :class="{ 'opacity-100': highlight === i }" title="Delete">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6"/><path d="M10 11v6M14 11v6"/></svg>
+            </button>
           </div>
         </li>
 

@@ -85,9 +85,9 @@ function commitRename() {
               </template>
               <template v-else>
                 <span class="text-[12.5px] truncate">{{ splitName(q.name).leaf }}</span>
-                <button class="ml-auto text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 text-xs"
+                <button class="ml-auto text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-xs"
                   title="Rename (use folder/name to group)" @click.stop="beginRename(q.id, q.name)">✎</button>
-                <button class="text-red-500/60 hover:text-red-400 opacity-0 group-hover:opacity-100 text-xs"
+                <button class="text-red-500/60 hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-xs"
                   title="Delete" @click.stop="store.remove(q.id)">×</button>
               </template>
             </div>

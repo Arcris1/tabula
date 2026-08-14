@@ -108,7 +108,7 @@ async function save() {
       <button v-for="c in colors" :key="c" type="button" @click="onColorPick(c)"
         class="w-4 h-4 rounded-full border"
         :class="[
-          { gray: 'bg-zinc-500', blue: 'bg-blue-500', green: 'bg-green-500', amber: 'bg-amber-500', red: 'bg-red-500' }[c],
+          { gray: 'bg-zinc-500', blue: 'bg-blue-500', green: 'bg-emerald-500', amber: 'bg-amber-500', red: 'bg-red-500' }[c],
           form.color === c ? 'border-white' : 'border-transparent opacity-50',
         ]" />
       <label class="ml-auto flex items-center gap-1 text-xs text-zinc-400">
@@ -157,7 +157,7 @@ async function save() {
       <button type="button" @click="test" class="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800">
         {{ testState === "testing" ? "Testing…" : "Test Connection" }}
       </button>
-      <span v-if="testState === 'ok'" class="text-green-400 text-xs">{{ testMessage }}</span>
+      <span v-if="testState === 'ok'" class="text-emerald-400 text-xs">{{ testMessage }}</span>
       <span v-if="testState === 'fail'" class="text-red-400 text-xs truncate">{{ testMessage }}</span>
       <div class="ml-auto flex gap-2">
         <button type="button" @click="emit('cancel')" class="px-3 py-1.5 rounded text-zinc-400 hover:bg-zinc-800">Cancel</button>
